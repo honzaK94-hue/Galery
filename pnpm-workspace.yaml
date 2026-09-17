@@ -1,0 +1,16 @@
+minimumReleaseAge: 1440
+packages:
+  - artifacts/*
+  - lib/*
+autoInstallPeers: false
+allowBuilds:
+  - esbuild
+onlyBuiltDependencies:
+  - esbuild
+catalogs:
+  default:
+    "@tanstack/react-query": ^5.90.21
+    "@types/node": ^25.3.3
+    "@types/react": ^19.2.0
+    drizzle-orm: ^0.41.0
+    zod: ^3.25.76

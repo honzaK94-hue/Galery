@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: photos
+    description: Photo library operations
+  - name: albums
+    description: Album operations
+  - name: storage
+    description: Object storage upload operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /photos:
+    get:
+      operationId: listPhotos
+      tags: [photos]
+      summary: List photos
+      parameters:
+        - name: view
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [timeline, library]
+            default: timeline
+        - name: albumId
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Photos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Photo"
+    post:
+      operationId: createPhoto
+      tags: [photos]
+      summary: Save uploaded photo metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PhotoInput"
+      responses:
+        "201":
+          description: Created photo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Photo"
+  /photos/{photoId}:
+    delete:
+      operationId: deletePhoto
+      tags: [photos]
+      summary: Delete a photo
+      parameters:
+        - name: photoId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Photo deleted
+        "404":
+          description: Photo not found
+  /albums:
+    get:
+      operationId: listAlbums
+      tags: [albums]
+      summary: List albums
+      responses:
+        "200":
+          description: Albums
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Album"
+    post:
+      operationId: createAlbum
+      tags: [albums]
+      summary: Create an album
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlbumInput"
+      responses:
+        "201":
+          description: Created album
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Album"
+  /albums/{albumId}:
+    patch:
+      operationId: updateAlbum
+      tags: [albums]
+      summary: Rename an album
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlbumUpdate"
+      responses:
+        "200":
+          description: Updated album
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Album"
+    delete:
+      operationId: deleteAlbum
+      tags: [albums]
+      summary: Delete an album
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Album deleted
+        "404":
+          description: Album not found
+  /albums/{albumId}/photos/{photoId}:
+    post:
+      operationId: addPhotoToAlbum
+      tags: [albums]
+      summary: Add a photo to an album
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: photoId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Photo added
+        "404":
+          description: Album or photo not found
+    delete:
+      operationId: removePhotoFromAlbum
+      tags: [albums]
+      summary: Remove a photo from an album
+      parameters:
+        - name: albumId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: photoId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Photo removed
+        "404":
+          description: Album or photo not found
+  /library-summary:
+    get:
+      operationId: getLibrarySummary
+      tags: [photos]
+      summary: Get library totals
+      responses:
+        "200":
+          description: Photo library summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibrarySummary"
+  /storage/uploads/request-url:
+    post:
+      operationId: requestUploadUrl
+      tags: [storage]
+      summary: Request an object storage upload URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadUrlInput"
+      responses:
+        "200":
+          description: Presigned upload URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadUrlResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    Photo:
+      type: object
+      required: [id, name, objectPath, createdAt, capturedAt, size, width, height, albumIds]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        objectPath: { type: string }
+        createdAt: { type: string, format: date-time }
+        capturedAt: { type: ["string", "null"], format: date-time }
+        size: { type: integer }
+        width: { type: ["integer", "null"] }
+        height: { type: ["integer", "null"] }
+        albumIds:
+          type: array
+          items: { type: integer }
+    PhotoInput:
+      type: object
+      required: [name, objectPath, size]
+      properties:
+        name: { type: string, minLength: 1 }
+        objectPath: { type: string, minLength: 1 }
+        capturedAt: { type: ["string", "null"], format: date-time }
+        size: { type: integer, minimum: 0 }
+        width: { type: ["integer", "null"], minimum: 0 }
+        height: { type: ["integer", "null"], minimum: 0 }
+    Album:
+      type: object
+      required: [id, name, photoCount, coverPhotoId, createdAt]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        photoCount: { type: integer }
+        coverPhotoId: { type: ["integer", "null"] }
+        createdAt: { type: string, format: date-time }
+    AlbumInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+    AlbumUpdate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+    LibrarySummary:
+      type: object
+      required: [totalPhotos, timelinePhotos, albumPhotos, albums]
+      properties:
+        totalPhotos: { type: integer }
+        timelinePhotos: { type: integer }
+        albumPhotos: { type: integer }
+        albums: { type: integer }
+    UploadUrlInput:
+      type: object
+      required: [name, size, contentType]
+      properties:
+        name: { type: string, minLength: 1 }
+        size: { type: integer, minimum: 1 }
+        contentType: { type: string, minLength: 1 }
+    UploadUrlResponse:
+      type: object
+      required: [uploadURL, objectPath]
+      properties:
+        uploadURL: { type: string, format: uri }
+        objectPath: { type: string }
+

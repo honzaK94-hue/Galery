@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Galerie",
+    "slug": "galerie",
+    "owner": "shiny94s-team",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "galerie-mobile",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B0F14"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Galerie potřebuje přístup k vaší knihovně fotek pro zobrazení snímků."
+      }
+    },
+    "android": {
+      "package": "app.galerie.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Galerie potřebuje přístup k vaší knihovně fotek pro zobrazení snímků.",
+          "savePhotosPermission": "Galerie potřebuje přístup pro uložení snímků.",
+          "isAccessMediaLocationEnabled": true,
+          "granularPermissions": ["photo", "video"]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "cb3fbb53-ac69-4bcb-a44d-3eedbb08a975"
+      }
+    }
+  }
+}

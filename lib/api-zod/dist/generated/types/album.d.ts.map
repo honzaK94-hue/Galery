@@ -1,0 +1,1 @@
+{"version":3,"file":"album.d.ts","sourceRoot":"","sources":["../../../src/generated/types/album.ts"],"names":[],"mappings":"AAAA;;;;;;GAMG;AAEH,MAAM,WAAW,KAAK;IACpB,EAAE,EAAE,MAAM,CAAC;IACX,IAAI,EAAE,MAAM,CAAC;IACb,UAAU,EAAE,MAAM,CAAC;IACnB,gBAAgB;IAChB,YAAY,EAAE,MAAM,GAAG,IAAI,CAAC;IAC5B,SAAS,EAAE,IAAI,CAAC;CACjB"}
