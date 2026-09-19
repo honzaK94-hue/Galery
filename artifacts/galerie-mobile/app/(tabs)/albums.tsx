@@ -4,6 +4,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { albumStore, type AlbumWithCount } from "@/db";
 import { getNativeAlbums, type NativeAlbumDisplay } from "@/lib/native-albums";
+import { getMediaPage, type GalleryAsset } from "@/lib/media";
 import {
   AlbumCards,
   NewAlbumButton,
@@ -97,6 +98,10 @@ function AlbumsContent() {
   const colors = useColors();
   const [custom, setCustom] = useState<AlbumWithCount[]>([]);
   const [native, setNative] = useState<NativeAlbumDisplay[]>([]);
+  const [favorites, setFavorites] = useState<{
+    count: number;
+    cover?: GalleryAsset;
+  }>({ count: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,10 +121,16 @@ function AlbumsContent() {
     const results = await Promise.allSettled([
       albumStore.getAlbums("normal"),
       getNativeAlbums(),
+      getMediaPage({ kind: "favorites" }),
     ]);
     if (current !== generation.current) return;
     if (results[0].status === "fulfilled") setCustom(results[0].value);
     if (results[1].status === "fulfilled") setNative(results[1].value);
+    if (results[2].status === "fulfilled")
+      setFavorites({
+        count: results[2].value.totalCount ?? results[2].value.items.length,
+        cover: results[2].value.items[0],
+      });
     setError(
       results.some((result) => result.status === "rejected")
         ? "Některá alba se nepodařilo načíst."
@@ -160,6 +171,15 @@ function AlbumsContent() {
           params: { id: String(album.id) },
         }),
     }));
+  if (matches("Oblíbené"))
+    systemCards.unshift({
+      key: "favorites",
+      title: "Oblíbené",
+      count: favorites.count,
+      uri: favorites.cover?.uri,
+      video: favorites.cover?.mediaType === "video",
+      onPress: () => router.push("/favorites"),
+    });
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <GalleryHeader

@@ -1,5 +1,10 @@
 import * as MediaLibrary from "expo-media-library/legacy";
 import { mediaStore, type MediaIdentity, type MediaItemRow } from "@/db";
+import {
+  getDeviceMedia,
+  isDeviceMediaAvailable,
+  queryDeviceMedia,
+} from "../modules/galerie-device";
 
 export type GalleryAsset = {
   id: string;
@@ -10,18 +15,31 @@ export type GalleryAsset = {
   height: number;
   creationTime: number;
   duration: number;
+  isFavorite?: boolean;
+  isTrashed?: boolean;
+  dateExpires?: number | null;
 };
 export type MediaSource = {
-  kind: "photos" | "videos" | "native" | "album" | "hidden" | "trash";
+  kind:
+    "photos" | "videos" | "native" | "album" | "hidden" | "trash" | "favorites";
   id?: string;
   albumType?: "normal" | "hidden";
   query?: string;
   sort?: "newest" | "oldest" | "name";
+  includeHidden?: boolean;
 };
 export type PageCursor = {
   after?: string;
   offset: number;
   orderedItems?: GalleryAsset[];
+  trashMerge?: {
+    legacyItems: GalleryAsset[];
+    legacyIndex: number;
+    nativeItems: GalleryAsset[];
+    nativeOffset: number;
+    nativeDone: boolean;
+    nativeTotal: number;
+  };
   dateMerge?: {
     fallbackItems: GalleryAsset[];
     fallbackIndex: number;
@@ -37,7 +55,20 @@ export type MediaPage = {
   hasMore: boolean;
   totalCount?: number;
 };
-export function fromAsset(asset: MediaLibrary.Asset): GalleryAsset {
+export function fromAsset(
+  asset: Pick<
+    MediaLibrary.Asset,
+    | "id"
+    | "uri"
+    | "filename"
+    | "mediaType"
+    | "width"
+    | "height"
+    | "creationTime"
+    | "modificationTime"
+    | "duration"
+  >,
+): GalleryAsset {
   return {
     id: asset.id,
     uri: asset.uri,
@@ -48,6 +79,29 @@ export function fromAsset(asset: MediaLibrary.Asset): GalleryAsset {
     creationTime:
       asset.creationTime > 0 ? asset.creationTime : asset.modificationTime,
     duration: asset.duration,
+  };
+}
+export type ResolvedMediaAsset = GalleryAsset & {
+  localUri?: string;
+  modificationTime: number;
+  isFavorite: boolean;
+  isTrashed: boolean;
+  dateExpires: number | null;
+};
+export async function readMediaAsset(id: string): Promise<ResolvedMediaAsset> {
+  if (isDeviceMediaAvailable) {
+    const asset = (await getDeviceMedia([id]))[0];
+    if (!asset) throw new Error("Médium již není dostupné.");
+    return asset;
+  }
+  const asset = await MediaLibrary.getAssetInfoAsync(id);
+  return {
+    ...fromAsset(asset),
+    localUri: asset.localUri,
+    modificationTime: asset.modificationTime,
+    isFavorite: !!asset.isFavorite,
+    isTrashed: false,
+    dateExpires: null,
   };
 }
 export function fromRow(row: MediaItemRow): GalleryAsset {
@@ -80,12 +134,40 @@ export async function getMediaPage(
   isCurrent = () => true,
 ): Promise<MediaPage> {
   const size = 60;
+  if (source.kind === "favorites") {
+    if (!isDeviceMediaAvailable)
+      throw new Error("Oblíbené vyžadují aktuální Android APK Galerie.");
+    const excluded = await mediaStore.getExcludedMediaIds();
+    const page = await queryDeviceMedia({
+      kind: "favorites",
+      offset: cursor.offset,
+      limit: size,
+      query: source.query,
+      sort: source.sort,
+      excludeIds: [...excluded],
+    });
+    if (!isCurrent()) return { items: [], cursor, hasMore: false };
+    await mediaStore.upsertBatch(page.items.map(identity), isCurrent);
+    return {
+      items: page.items,
+      cursor: { offset: page.nextOffset },
+      hasMore: page.hasMore,
+      totalCount: page.totalCount,
+    };
+  }
+  if (source.kind === "trash" && isDeviceMediaAvailable) {
+    return getTrashPage(source, cursor, isCurrent);
+  }
   if (
     source.kind === "album" ||
     source.kind === "hidden" ||
     source.kind === "trash"
   ) {
-    const options = { query: source.query, sort: source.sort };
+    const options = {
+      query: source.query,
+      sort: source.sort,
+      includeHidden: source.includeHidden === true,
+    };
     const rows =
       source.kind === "hidden"
         ? await mediaStore.getHiddenMedia(size + 1, cursor.offset, options)
@@ -102,7 +184,7 @@ export async function getMediaPage(
       : source.kind === "hidden"
         ? await mediaStore.getHiddenMediaCount()
         : source.kind === "trash"
-          ? await mediaStore.getTrashedMediaCount()
+          ? await mediaStore.getTrashedMediaCount(options)
           : await mediaStore.getMediaCountByAlbum(Number(source.id));
     return {
       items: rows.slice(0, size).map(fromRow),
@@ -314,5 +396,90 @@ export async function getMediaPage(
       state.nativeItems.length > 0 ||
       !state.nativeDone,
     totalCount: !hidden.size && !query ? state.totalCount : undefined,
+  };
+}
+
+async function getTrashPage(
+  source: MediaSource,
+  cursor: PageCursor,
+  isCurrent: () => boolean,
+): Promise<MediaPage> {
+  const hidden = source.includeHidden
+    ? new Set<string>()
+    : await mediaStore.getHiddenMediaIds();
+  const options = { query: source.query, sort: source.sort };
+  const compare = (a: GalleryAsset, b: GalleryAsset) => {
+    if (source.sort === "name") {
+      // MediaStore uses NOCASE order; do not use locale/numeric collation here
+      // because both sides of a streaming merge must use the same ordering.
+      const nameA = a.filename.replace(/[A-Z]/g, (char) => char.toLowerCase());
+      const nameB = b.filename.replace(/[A-Z]/g, (char) => char.toLowerCase());
+      if (nameA !== nameB) return nameA < nameB ? -1 : 1;
+    } else {
+      const dates =
+        source.sort === "oldest"
+          ? a.creationTime - b.creationTime
+          : b.creationTime - a.creationTime;
+      if (dates) return dates;
+    }
+    return Number(b.id) - Number(a.id) || b.id.localeCompare(a.id);
+  };
+  const state = cursor.trashMerge
+    ? { ...cursor.trashMerge, nativeItems: [...cursor.trashMerge.nativeItems] }
+    : {
+        legacyItems: (await mediaStore.getLegacyTrashedMedia(options))
+          .filter((row) => !hidden.has(row.media_id))
+          .map(fromRow)
+          .sort(compare),
+        legacyIndex: 0,
+        nativeItems: [] as GalleryAsset[],
+        nativeOffset: 0,
+        nativeDone: false,
+        nativeTotal: 0,
+      };
+  const excludeIds = [
+    ...new Set([...hidden, ...state.legacyItems.map((item) => item.id)]),
+  ];
+  const items: GalleryAsset[] = [];
+  while (items.length < 60 && isCurrent()) {
+    while (!state.nativeItems.length && !state.nativeDone) {
+      const page = await queryDeviceMedia({
+        kind: "trash",
+        offset: state.nativeOffset,
+        limit: 60,
+        query: source.query,
+        sort: source.sort,
+        excludeIds,
+      });
+      if (!isCurrent()) return { items: [], cursor, hasMore: false };
+      await mediaStore.upsertBatch(page.items.map(identity), isCurrent);
+      // Indexing another trash page must not invalidate and restart that same
+      // pagination session. Actions/foreground reconciliation emit revisions.
+      await mediaStore.syncNativeTrash(page.items, isCurrent, false);
+      if (!isCurrent()) return { items: [], cursor, hasMore: false };
+      state.nativeItems = page.items;
+      state.nativeOffset = page.nextOffset;
+      state.nativeDone = !page.hasMore;
+      state.nativeTotal = page.totalCount;
+    }
+    const legacy = state.legacyItems[state.legacyIndex];
+    const native = state.nativeItems[0];
+    if (!legacy && !native) break;
+    if (legacy && (!native || compare(legacy, native) <= 0)) {
+      state.legacyIndex++;
+      if (!hidden.has(legacy.id)) items.push(legacy);
+    } else if (native) {
+      state.nativeItems.shift();
+      if (!hidden.has(native.id)) items.push(native);
+    }
+  }
+  return {
+    items,
+    cursor: { offset: cursor.offset + items.length, trashMerge: state },
+    hasMore:
+      state.legacyIndex < state.legacyItems.length ||
+      state.nativeItems.length > 0 ||
+      !state.nativeDone,
+    totalCount: state.nativeTotal + state.legacyItems.length,
   };
 }

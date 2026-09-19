@@ -18,6 +18,7 @@ export type MediaItemRow = {
   is_hidden: 0 | 1;
   is_available: 0 | 1;
   trashed_at: number | null;
+  native_trashed: 0 | 1;
 };
 export type MediaIdentity = {
   mediaId: string;
@@ -33,6 +34,7 @@ export type MediaIdentity = {
 export type MediaQueryOptions = {
   query?: string;
   sort?: "newest" | "oldest" | "name";
+  includeHidden?: boolean;
 };
 
 function searchPattern(query?: string): string {
@@ -124,6 +126,19 @@ export class MediaStore {
           (
             await db.getAllAsync<{ media_id: string }>(
               "SELECT media_id FROM media_items WHERE trashed_at IS NOT NULL",
+            )
+          ).map((row) => row.media_id),
+        ),
+    );
+  }
+  getSystemTrashedMediaIds(): Promise<Set<string>> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        new Set(
+          (
+            await db.getAllAsync<{ media_id: string }>(
+              "SELECT media_id FROM media_items WHERE native_trashed=1",
             )
           ).map((row) => row.media_id),
         ),
@@ -240,12 +255,54 @@ export class MediaStore {
     return databaseTask(this.db, (db) =>
       db.getAllAsync<MediaItemRow>(
         `SELECT * FROM media_items WHERE trashed_at IS NOT NULL AND is_available=1
+        ${options?.includeHidden ? "" : "AND is_hidden=0"}
         AND COALESCE(filename,'') LIKE ? ESCAPE '\\'
       ORDER BY ${options?.sort ? mediaOrder(options) : "trashed_at DESC, id DESC"}
       LIMIT ? OFFSET ?`,
         [searchPattern(options?.query), limit, offset],
       ),
     );
+  }
+  getLegacyTrashedMedia(options?: MediaQueryOptions): Promise<MediaItemRow[]> {
+    return databaseTask(this.db, (db) =>
+      db.getAllAsync<MediaItemRow>(
+        `SELECT * FROM media_items WHERE trashed_at IS NOT NULL
+          AND native_trashed=0 AND is_available=1
+          AND COALESCE(filename,'') LIKE ? ESCAPE '\\'
+          ORDER BY ${mediaOrder(options)}`,
+        [searchPattern(options?.query)],
+      ),
+    );
+  }
+  async syncNativeTrash(
+    states: { id: string; isTrashed: boolean }[],
+    isCurrent = () => true,
+    notify = true,
+  ): Promise<void> {
+    if (!states.length) return;
+    let changed = 0;
+    await databaseTask(this.db, async (db) => {
+      if (!isCurrent()) return;
+      await db.withTransactionAsync(async () => {
+        for (const state of states) {
+          if (!isCurrent()) throw new Error("Obnova knihovny byla přerušena.");
+          // Leave a legacy local-trash marker untouched when MediaStore says
+          // ordinary media. Only a previous native trash marker may auto-clear.
+          changed += (
+            await db.runAsync(
+              state.isTrashed
+                ? `UPDATE media_items SET native_trashed=1, trashed_at=COALESCE(trashed_at,?)
+                    WHERE media_id=? AND (native_trashed=0 OR trashed_at IS NULL)`
+                : `UPDATE media_items SET native_trashed=0, trashed_at=NULL
+                    WHERE media_id=? AND native_trashed=1`,
+              state.isTrashed ? [Date.now(), state.id] : [state.id],
+            )
+          ).changes;
+        }
+        if (!isCurrent()) throw new Error("Obnova knihovny byla přerušena.");
+      });
+    });
+    if (changed && notify) notifyLibraryChanged();
   }
   async setTrashedBatch(mediaIds: string[], trashed: boolean): Promise<void> {
     if (!mediaIds.length) return;
@@ -258,7 +315,7 @@ export class MediaStore {
           const result = await db.runAsync(
             trashed
               ? "UPDATE media_items SET trashed_at=COALESCE(trashed_at,?) WHERE media_id=?"
-              : "UPDATE media_items SET trashed_at=? WHERE media_id=?",
+              : "UPDATE media_items SET trashed_at=?,native_trashed=0 WHERE media_id=?",
             [trashed ? now : null, id],
           );
           if (!result.changes)
@@ -281,13 +338,16 @@ export class MediaStore {
         )?.count ?? 0,
     );
   }
-  getTrashedMediaCount(): Promise<number> {
+  getTrashedMediaCount(options?: MediaQueryOptions): Promise<number> {
     return databaseTask(
       this.db,
       async (db) =>
         (
           await db.getFirstAsync<{ count: number }>(
-            "SELECT COUNT(*) AS count FROM media_items WHERE trashed_at IS NOT NULL AND is_available=1",
+            `SELECT COUNT(*) AS count FROM media_items WHERE trashed_at IS NOT NULL AND is_available=1
+              ${options?.includeHidden ? "" : "AND is_hidden=0"}
+              AND COALESCE(filename,'') LIKE ? ESCAPE '\\'`,
+            [searchPattern(options?.query)],
           )
         )?.count ?? 0,
     );

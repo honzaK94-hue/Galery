@@ -22,7 +22,7 @@ export default function HelpScreen() {
     ],
     [
       "Koš a mazání",
-      "Do koše přesune médium pouze uvnitř Galerie a lze jej obnovit. Smazat z telefonu je trvalá akce s potvrzením. Smazání vlastního alba nebo odebrání média z alba nikdy nemaže soubor v telefonu.",
+      "Do koše používá systémový koš Androidu. Položku můžete obnovit do vypršení lhůty; datum je uvedené v koši a informacích média. Starý místní koš lze převést tlačítkem Převést starý koš. Vysypat zobrazený koš trvale smaže pouze položky tohoto pohledu po potvrzení. Smazání alba ani odebrání člena nemaže originál.",
     ],
     [
       "Prohlížeč",
@@ -30,7 +30,19 @@ export default function HelpScreen() {
     ],
     [
       "Sdílení a přístup",
-      "Sdílet lze fotografii i video v prohlížeči nebo jednu vybranou položku v seznamu. Po změně oprávnění v nastavení telefonu Galerie znovu zkontroluje dostupná média.",
+      "Sdílet lze fotografii i video v prohlížeči a více vybraných položek přes systémovou nabídku Androidu. Po změně oprávnění v nastavení telefonu Galerie znovu zkontroluje dostupná média.",
+    ],
+    [
+      "Oblíbené",
+      "Srdíčko v prohlížeči přidá nebo odebere médium z oblíbených Androidu. Hromadně je změníte ve výběru. Seznam je v Albech i ve Více. Skrytá média se v běžném seznamu oblíbených nezobrazují. Některé jiné galerie používají vlastní oddělený seznam oblíbených.",
+    ],
+    [
+      "Zabezpečení",
+      "Skryté položky a alba odemknete otiskem prstu nebo PINem, gestem či heslem telefonu. Při opuštění aplikace se opět zamknou. Změnu zámku najdete v Nastavení; vypnutí vyžaduje ověření. Screenshoty skryté části jsou blokované. Originální soubory nejsou šifrované. Skrytá videa používají zabezpečený prohlížeč Galerie.",
+    ],
+    [
+      "Nastavení a zálohy",
+      "V Nastavení lze měnit vzhled, řazení, hustotu, kvalitu náhledů, dvojité klepnutí, swipe a automatické přehrávání videa. Export/Import uloží či obnoví alba, jejich členství, skrytý stav a nastavení. JSON záloha neobsahuje samotné fotografie ani videa a je určená pro stejné identifikátory médií v tomto telefonu. Zámek se importem nemění.",
     ],
   ];
   return (

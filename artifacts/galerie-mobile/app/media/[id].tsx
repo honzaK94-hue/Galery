@@ -12,7 +12,6 @@ import {
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import * as MediaLibrary from "expo-media-library/legacy";
 import { mediaStore } from "@/db";
 import { AddToAlbumModal } from "@/components/AddToAlbumModal";
 import { MediaPermissionGate } from "@/components/MediaPermissionGate";
@@ -20,25 +19,111 @@ import { useGallery } from "@/components/GalleryProvider";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { ZoomablePhoto } from "@/components/ZoomablePhoto";
 import {
-  fromAsset,
+  readMediaAsset,
   getMediaPage,
   identity,
   type GalleryAsset,
 } from "@/lib/media";
 import { getViewerSession } from "@/lib/viewer-session";
-import { deleteFromPhone, shareMedia } from "@/lib/media-actions";
+import {
+  deleteMediaFromPhone,
+  shareMedia,
+  setMediaTrashed,
+  setMediaFavorite,
+} from "@/lib/media-actions";
+import { VaultGate } from "@/components/VaultGate";
+import { useGalleryPreferences } from "@/components/GalleryPreferences";
 import Feather from "@expo/vector-icons/Feather";
 import { StatusBar } from "expo-status-bar";
 import { MediaThumbnail } from "@/components/MediaThumbnail";
 
 export default function MediaScreen() {
+  const params = useLocalSearchParams<{ id: string; session?: string }>();
+  const { revision } = useGallery();
+  const routeKey = JSON.stringify([params.id, params.session]);
+  const [position, setPosition] = useState<{ key: string; id: string } | null>(
+    null,
+  );
+  const context = getViewerSession(params.session);
+  const retainedId = context?.currentId;
+  const currentId =
+    retainedId && context?.items.some((item) => item.id === retainedId)
+      ? retainedId
+      : params.id;
+  const onCurrentIdChange = useCallback(
+    (id: string) => {
+      setPosition({ key: routeKey, id });
+    },
+    [routeKey],
+  );
+  const [privacy, setPrivacy] = useState<{
+    key: string;
+    hidden: boolean;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const source = context?.source;
+    void mediaStore
+      .getMediaItemByMediaId(currentId)
+      .then((row) => {
+        if (!cancelled) {
+          // A hide/delete can advance the session while SQLite is resolving
+          // this check. Never apply the removed item's privacy to its successor.
+          const latest = getViewerSession(params.session);
+          const latestId = latest?.currentId;
+          if (
+            latestId &&
+            latest?.items.some((item) => item.id === latestId) &&
+            latestId !== currentId
+          ) {
+            onCurrentIdChange(latestId);
+            return;
+          }
+          setPrivacy({
+            key: routeKey,
+            hidden: Boolean(
+              row?.is_hidden ||
+              source?.kind === "hidden" ||
+              source?.albumType === "hidden" ||
+              source?.includeHidden,
+            ),
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPrivacy({ key: routeKey, hidden: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentId,
+    params.session,
+    routeKey,
+    revision,
+    position?.id,
+    onCurrentIdChange,
+  ]);
   return (
     <MediaPermissionGate>
-      <Viewer />
+      {privacy?.key !== routeKey ? (
+        <ActivityIndicator style={{ flex: 1 }} />
+      ) : privacy.hidden ? (
+        <VaultGate onBack={() => router.back()}>
+          <Viewer key={routeKey} onCurrentIdChange={onCurrentIdChange} />
+        </VaultGate>
+      ) : (
+        <Viewer key={routeKey} onCurrentIdChange={onCurrentIdChange} />
+      )}
     </MediaPermissionGate>
   );
 }
-function Viewer() {
+function Viewer({
+  onCurrentIdChange,
+}: {
+  onCurrentIdChange: (id: string) => void;
+}) {
+  const prefs = useGalleryPreferences();
   const params = useLocalSearchParams<{ id: string; session?: string }>();
   const session = useRef(getViewerSession(params.session));
   const [items, setItems] = useState<GalleryAsset[]>(
@@ -47,7 +132,9 @@ function Viewer() {
   const [index, setIndex] = useState(
     Math.max(
       0,
-      items.findIndex((item) => item.id === params.id),
+      items.findIndex(
+        (item) => item.id === (session.current?.currentId ?? params.id),
+      ),
     ),
   );
   const [asset, setAsset] = useState<GalleryAsset | null>(null);
@@ -71,6 +158,10 @@ function Viewer() {
   const { refreshLibrary, revision } = useGallery();
   const currentId = items[index]?.id ?? params.id;
   useEffect(() => {
+    if (session.current) session.current.currentId = currentId;
+    onCurrentIdChange(currentId);
+  }, [currentId, onCurrentIdChange]);
+  useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -83,7 +174,7 @@ function Viewer() {
     setZoomed(false);
     void (async () => {
       try {
-        const detail = await MediaLibrary.getAssetInfoAsync(currentId);
+        const detail = await readMediaAsset(currentId);
         const row = await mediaStore.getMediaItemByMediaId(currentId);
         if (cancelled) return;
         const source = session.current?.source;
@@ -99,7 +190,7 @@ function Viewer() {
           return;
         }
         const resolved = {
-          ...fromAsset(detail),
+          ...detail,
           uri:
             detail.mediaType === "video"
               ? detail.uri
@@ -113,7 +204,7 @@ function Viewer() {
           favorite: !!detail.isFavorite,
         });
         setHidden(Boolean(row?.is_hidden));
-        setTrashed(Boolean(row?.trashed_at));
+        setTrashed(Boolean(row?.trashed_at || detail.isTrashed));
         if (!items.length) setItems([resolved]);
       } catch {
         if (!cancelled)
@@ -191,20 +282,24 @@ function Viewer() {
     const next = (session.current?.items ?? items).filter(
       (item) => item.id !== currentId,
     );
+    const nextIndex = Math.min(index, next.length - 1);
     if (session.current) {
       session.current.items = next;
       session.current.cursor = { offset: 0 };
+      session.current.currentId = next[nextIndex]?.id;
     }
     if (!next.length) {
       router.back();
       return;
     }
-    const nextIndex = Math.min(index, next.length - 1);
+    onCurrentIdChange(next[nextIndex].id);
     setIndex(nextIndex);
     setItems(next);
     list.current?.scrollToIndex({ index: nextIndex, animated: false });
   };
-  const action = async (kind: "hide" | "delete" | "share" | "trash") => {
+  const action = async (
+    kind: "hide" | "delete" | "share" | "trash" | "favorite",
+  ) => {
     if (busy || !asset) return;
     setBusy(true);
     try {
@@ -214,12 +309,24 @@ function Viewer() {
         removeCurrent();
       }
       if (kind === "trash") {
-        await mediaStore.setTrashedBatch([currentId], !trashed);
-        removeCurrent();
+        const result = await setMediaTrashed([currentId], !trashed);
+        if (result.completedIds.includes(currentId)) removeCurrent();
       }
-      if (kind === "delete" && (await deleteFromPhone([currentId]))) {
-        removeCurrent();
-        refreshLibrary();
+      if (kind === "delete") {
+        const result = await deleteMediaFromPhone([currentId]);
+        if (result.completedIds.includes(currentId)) {
+          removeCurrent();
+          refreshLibrary();
+        }
+      }
+      if (kind === "favorite") {
+        const favorite = !metadata.favorite;
+        const result = await setMediaFavorite([currentId], favorite);
+        if (result.completedIds.includes(currentId)) {
+          setMetadata((value) => ({ ...value, favorite }));
+          if (!favorite && session.current?.source.kind === "favorites")
+            removeCurrent();
+        }
       }
     } catch (e) {
       Alert.alert("Akce se nezdařila", String(e));
@@ -235,7 +342,7 @@ function Viewer() {
     }
     Alert.alert(
       "Odstranit médium",
-      "Přesun do koše lze v Galerii vrátit. Smazání z telefonu odstraní samotný soubor.",
+      "Přesun do systémového koše lze vrátit do data vypršení. Smazání z telefonu odstraní soubor natrvalo.",
       [
         { text: "Zrušit", style: "cancel" },
         { text: "Do koše", onPress: () => void action("trash") },
@@ -319,7 +426,7 @@ function Viewer() {
           "more-vertical",
           "Možnosti média",
           () =>
-            Alert.alert("Médium", asset?.filename, [
+            Alert.alert("Médium", hidden ? "Skrytá položka" : asset?.filename, [
               { text: "Informace", onPress: () => setInfo(true) },
               ...(!trashed
                 ? [
@@ -345,7 +452,7 @@ function Viewer() {
             data={items}
             horizontal
             pagingEnabled
-            scrollEnabled={!zoomed && !busy}
+            scrollEnabled={prefs.swipeEnabled && !zoomed && !busy}
             keyExtractor={(item) => item.id}
             initialScrollIndex={index}
             getItemLayout={(_, position) => ({
@@ -363,7 +470,11 @@ function Viewer() {
               const next = Math.round(
                 event.nativeEvent.contentOffset.x / frame.width,
               );
-              setIndex(Math.max(0, Math.min(items.length - 1, next)));
+              const nextIndex = Math.max(0, Math.min(items.length - 1, next));
+              if (session.current)
+                session.current.currentId = items[nextIndex]?.id;
+              if (items[nextIndex]) onCurrentIdChange(items[nextIndex].id);
+              setIndex(nextIndex);
               setInfo(false);
             }}
             onEndReached={() => void more()}
@@ -386,7 +497,15 @@ function Viewer() {
                     </View>
                   ) : asset?.id === item.id ? (
                     asset.mediaType === "video" ? (
-                      <VideoPlayer key={asset.id} uri={asset.uri} />
+                      <VideoPlayer
+                        key={asset.id}
+                        uri={asset.uri}
+                        autoplay={prefs.videoAutoplay}
+                        secure={
+                          hidden ||
+                          Boolean(session.current?.source.includeHidden)
+                        }
+                      />
                     ) : (
                       <ZoomablePhoto
                         key={`${asset.id}:${reset}:${frame.width}:${frame.height}`}
@@ -396,6 +515,7 @@ function Viewer() {
                         imageWidth={asset.width}
                         imageHeight={asset.height}
                         onZoomChange={setZoomed}
+                        doubleTapEnabled={prefs.doubleTapEnabled}
                       />
                     )
                   ) : (
@@ -446,6 +566,16 @@ function Viewer() {
           <Text style={{ color: "white", marginTop: 8 }}>
             Oblíbené: {metadata.favorite ? "Ano" : "Ne"}
           </Text>
+          {trashed ? (
+            <Text style={{ color: "white", marginTop: 8 }}>
+              {asset.dateExpires
+                ? "Android může trvale smazat po: " +
+                  new Date(asset.dateExpires).toLocaleString("cs-CZ")
+                : asset.isTrashed
+                  ? "Systémový koš; Android neposkytl datum vypršení."
+                  : "Položka z dřívějšího místního koše."}
+            </Text>
+          ) : null}
         </ScrollView>
       ) : null}
       <View
@@ -473,6 +603,15 @@ function Viewer() {
               busy || !asset,
             )
           : null}
+        {!trashed
+          ? iconButton(
+              "heart",
+              metadata.favorite ? "Odebrat z oblíbených" : "Přidat k oblíbeným",
+              () => void action("favorite"),
+              busy || !asset,
+              metadata.favorite,
+            )
+          : null}
         {iconButton(
           trashed || hidden ? "rotate-ccw" : "eye-off",
           trashed || hidden ? "Obnovit" : "Skrýt",
@@ -489,6 +628,38 @@ function Viewer() {
         )}
         {busy ? <ActivityIndicator color="white" /> : null}
       </View>
+      {!prefs.swipeEnabled && items.length > 1 ? (
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            backgroundColor: "#030B12",
+          }}
+        >
+          {button(
+            "‹ Předchozí",
+            () => {
+              const next = index - 1;
+              if (session.current) session.current.currentId = items[next]?.id;
+              if (items[next]) onCurrentIdChange(items[next].id);
+              setIndex(next);
+              list.current?.scrollToIndex({ index: next, animated: false });
+            },
+            index === 0 || busy,
+          )}
+          {button(
+            "Další ›",
+            () => {
+              const next = index + 1;
+              if (session.current) session.current.currentId = items[next]?.id;
+              if (items[next]) onCurrentIdChange(items[next].id);
+              setIndex(next);
+              list.current?.scrollToIndex({ index: next, animated: false });
+            },
+            index >= items.length - 1 || busy,
+          )}
+        </View>
+      ) : null}
       <AddToAlbumModal
         visible={picker}
         initialType={hidden ? "hidden" : "normal"}

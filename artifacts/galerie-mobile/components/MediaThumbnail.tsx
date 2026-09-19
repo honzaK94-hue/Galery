@@ -3,10 +3,11 @@ import { Image } from "expo-image";
 import { PixelRatio, View } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { createVideoPlayer, type VideoThumbnail } from "expo-video";
+import { useGalleryPreferences } from "./GalleryPreferences";
 
 type CachedFrame = { frame: VideoThumbnail; bytes: number };
 const cache = new Map<string, CachedFrame>();
-const CACHE_BYTES = 32 * 1024 * 1024;
+let cacheLimitBytes = 32 * 1024 * 1024;
 let cacheBytes = 0;
 let cacheGeneration = 0;
 let queue = Promise.resolve();
@@ -28,7 +29,7 @@ function remember(key: string, frame: VideoThumbnail) {
   const bytes = Math.max(1, frame.width) * Math.max(1, frame.height) * 4;
   cache.set(key, { frame, bytes });
   cacheBytes += bytes;
-  while (cacheBytes > CACHE_BYTES && cache.size > 1) {
+  while (cacheBytes > cacheLimitBytes && cache.size > 1) {
     const oldest = cache.keys().next().value!;
     cacheBytes -= cache.get(oldest)!.bytes;
     cache.delete(oldest);
@@ -39,6 +40,7 @@ function frameSize(
   height: number,
   mediaWidth?: number,
   mediaHeight?: number,
+  maxDimension = 1536,
 ) {
   const pixelWidth = PixelRatio.getPixelSizeForLayoutSize(width);
   const pixelHeight = PixelRatio.getPixelSizeForLayoutSize(height);
@@ -57,7 +59,7 @@ function frameSize(
     scale && mediaHeight
       ? mediaHeight * scale
       : Math.max(pixelWidth, pixelHeight) * 1.8;
-  const cap = Math.min(1, 1536 / Math.max(targetWidth, targetHeight));
+  const cap = Math.min(1, maxDimension / Math.max(targetWidth, targetHeight));
   return {
     width: Math.min(
       mediaWidth || 1536,
@@ -89,12 +91,16 @@ export function MediaThumbnail({
   mediaHeight?: number;
   contentFit?: "cover" | "contain";
 }) {
+  const { thumbnailQuality } = useGalleryPreferences();
+  const highQuality = thumbnailQuality === "high";
+  cacheLimitBytes = (highQuality ? 32 : 16) * 1024 * 1024;
   const [measured, setMeasured] = useState({ width: 0, height: 0 });
   const size = frameSize(
     width ?? measured.width,
     height ?? measured.height,
     mediaWidth,
     mediaHeight,
+    highQuality ? 1536 : 768,
   );
   const ready =
     (width ?? measured.width) > 0 && (height ?? measured.height) > 0;
@@ -167,7 +173,7 @@ export function MediaThumbnail({
           style={{ width: "100%", height: "100%" }}
           contentFit={contentFit}
           allowDownscaling
-          decodeFormat="argb"
+          decodeFormat={highQuality ? "argb" : "rgb"}
           cachePolicy="memory-disk"
           recyclingKey={video ? key : uri}
           transition={80}

@@ -16,6 +16,7 @@ export function ZoomablePhoto({
   imageWidth,
   imageHeight,
   onZoomChange,
+  doubleTapEnabled = true,
 }: {
   uri: string;
   width: number;
@@ -23,6 +24,7 @@ export function ZoomablePhoto({
   imageWidth: number;
   imageHeight: number;
   onZoomChange: (zoomed: boolean) => void;
+  doubleTapEnabled?: boolean;
 }) {
   const scale = useSharedValue(1);
   const startScale = useSharedValue(1);
@@ -84,6 +86,7 @@ export function ZoomablePhoto({
       );
     });
   const doubleTap = Gesture.Tap()
+    .enabled(doubleTapEnabled)
     .numberOfTaps(2)
     .onEnd((event, success) => {
       if (!success) return;

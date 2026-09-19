@@ -6,6 +6,7 @@ export type ViewerSession = {
   source: MediaSource;
   cursor: PageCursor;
   hasMore: boolean;
+  currentId?: string;
 };
 let session: ViewerSession | null = null;
 export function createViewerSession(

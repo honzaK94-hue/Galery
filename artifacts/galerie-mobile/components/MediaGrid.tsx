@@ -38,16 +38,23 @@ import {
   type GridDensity,
 } from "@/lib/timeline";
 import { albumStore, mediaStore } from "@/db";
-import { deleteFromPhone, shareMedia } from "@/lib/media-actions";
+import {
+  deleteMediaFromPhone,
+  shareMedia,
+  setMediaTrashed,
+  setMediaFavorite,
+} from "@/lib/media-actions";
 import { MediaThumbnail } from "./MediaThumbnail";
 
-type GridAction = "hide" | "delete" | "remove" | "share" | "trash" | "restore";
+type GridAction =
+  "hide" | "delete" | "remove" | "share" | "trash" | "restore" | "favorite";
 const Tile = memo(function Tile({
   asset,
   width,
   height,
   selected,
   selecting,
+  trash,
   onPress,
   onLongPress,
 }: {
@@ -56,6 +63,7 @@ const Tile = memo(function Tile({
   height: number;
   selected: boolean;
   selecting: boolean;
+  trash: boolean;
   onPress: (asset: GalleryAsset) => void;
   onLongPress: (asset: GalleryAsset) => void;
 }) {
@@ -107,6 +115,22 @@ const Tile = memo(function Tile({
             size={18}
             color="white"
           />
+        </View>
+      ) : null}
+      {trash ? (
+        <View
+          style={[
+            styles.badge,
+            { bottom: undefined, top: 6, maxWidth: width - 12 },
+          ]}
+        >
+          <Text numberOfLines={1} style={styles.duration}>
+            {asset.dateExpires
+              ? "Do " + new Date(asset.dateExpires).toLocaleDateString("cs-CZ")
+              : asset.isTrashed
+                ? "Systémový koš"
+                : "Místní koš"}
+          </Text>
         </View>
       ) : null}
     </Pressable>
@@ -352,15 +376,25 @@ export function MediaGrid({
     try {
       if (kind === "hide") await mediaStore.setHiddenBatch(ids, !hiddenContext);
       if (kind === "trash" || kind === "restore") {
-        await mediaStore.setTrashedBatch(ids, kind === "trash");
+        const result = await setMediaTrashed(ids, kind === "trash");
         setMessage(
-          kind === "trash"
-            ? "Přesunuto do koše Galerie"
-            : "Obnoveno z koše Galerie",
+          `${kind === "trash" ? "Přesunuto do koše" : "Obnoveno"}: ${result.completedIds.length} / ${ids.length}${result.cancelled ? " · zrušeno" : ""}`,
         );
+        if (!result.completedIds.length) return;
+        refreshLibrary();
       }
       if (kind === "delete") {
-        if (!(await deleteFromPhone(ids))) return;
+        const result = await deleteMediaFromPhone(ids);
+        if (!result.completedIds.length) return;
+        setMessage(`Smazáno: ${result.completedIds.length} / ${ids.length}`);
+        refreshLibrary();
+      }
+      if (kind === "favorite") {
+        const result = await setMediaFavorite(ids, source.kind !== "favorites");
+        setMessage(
+          `Změněno: ${result.completedIds.length} / ${ids.length}${result.cancelled ? " · zrušeno" : ""}`,
+        );
+        if (!result.completedIds.length) return;
         refreshLibrary();
       }
       if (kind === "remove")
@@ -368,7 +402,7 @@ export function MediaGrid({
           [...(await mediaStore.getMediaItemIdsByMediaIds(ids)).values()],
           Number(source.id),
         );
-      if (kind === "share") await shareMedia(ids[0]);
+      if (kind === "share") await shareMedia(ids);
       clear();
     } catch (e) {
       Alert.alert(
@@ -385,6 +419,7 @@ export function MediaGrid({
       ? ["restore", "delete"]
       : [
           "hide",
+          "favorite",
           ...(source.kind === "album" ? ["remove" as const] : []),
           "share",
           "trash",
@@ -397,6 +432,7 @@ export function MediaGrid({
     trash: "Do koše",
     restore: "Obnovit",
     delete: "Smazat z telefonu",
+    favorite: source.kind === "favorites" ? "Z oblíbených" : "Oblíbené",
   };
   const icons: Record<
     GridAction,
@@ -408,6 +444,7 @@ export function MediaGrid({
     trash: "archive",
     restore: "rotate-ccw",
     delete: "trash-2",
+    favorite: "heart",
   };
   return (
     <View
@@ -447,6 +484,7 @@ export function MediaGrid({
                   height={tileHeight}
                   selected={selected.has(asset.id)}
                   selecting={selecting}
+                  trash={source.kind === "trash"}
                   onPress={onPress}
                   onLongPress={onLongPress}
                 />
@@ -560,11 +598,7 @@ export function MediaGrid({
               </Pressable>
             ) : null}
             {actions.map((kind) => {
-              const disabled =
-                busy ||
-                selectingAll ||
-                !selected.size ||
-                (kind === "share" && selected.size !== 1);
+              const disabled = busy || selectingAll || !selected.size;
               const color =
                 kind === "delete" ? colors.destructive : colors.primary;
               return (
@@ -572,9 +606,7 @@ export function MediaGrid({
                   key={kind}
                   accessibilityRole="button"
                   accessibilityLabel={
-                    kind === "share"
-                      ? "Sdílet jednu vybranou položku"
-                      : labels[kind]
+                    kind === "share" ? "Sdílet vybrané položky" : labels[kind]
                   }
                   disabled={disabled}
                   onPress={() => void action(kind)}

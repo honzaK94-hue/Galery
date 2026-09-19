@@ -97,7 +97,7 @@ test("migration merges duplicate IDs, preserves all album links and hidden state
       .length,
     2,
   );
-  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 2);
+  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 3);
   assert.deepEqual(await db.getAllAsync("PRAGMA foreign_key_check"), []);
 });
 
@@ -128,7 +128,7 @@ test("v1 migration retains albums and settings, repairs hidden membership, and i
     ).value,
     "comfortable",
   );
-  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 2);
+  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 3);
   assert.deepEqual(await db.getAllAsync("PRAGMA foreign_key_check"), []);
 });
 
@@ -183,7 +183,12 @@ test("local trash preserves memberships and hidden flags across upserts, with sa
   await assert.rejects(media.setTrashedBatch(["a", "missing"], true));
   assert.equal(await media.getTrashedMediaCount(), 0);
   await media.setTrashedBatch(["a", "b"], true);
-  assert.equal(await media.getTrashedMediaCount(), 2);
+  assert.equal(await media.getTrashedMediaCount(), 1);
+  assert.deepEqual(
+    (await media.getTrashedMedia()).map((row) => row.media_id),
+    ["a"],
+  );
+  assert.equal(await media.getTrashedMediaCount({ includeHidden: true }), 2);
   assert.equal(await media.getHiddenMediaCount(), 0);
   assert.equal((await media.getMediaItemsByAlbum(album.id)).length, 0);
   assert.equal((await media.getMediaItemsByAlbum(hidden.id)).length, 0);
@@ -195,21 +200,21 @@ test("local trash preserves memberships and hidden flags across upserts, with sa
   assert.equal((await media.getMediaItemByMediaId("b")).trashed_at, stamp);
   assert.equal((await media.getMediaItemByMediaId("b")).is_hidden, 1);
   assert.deepEqual(
-    (await media.getTrashedMedia(1, 0, { sort: "oldest" })).map(
-      (r) => r.media_id,
-    ),
+    (
+      await media.getTrashedMedia(1, 0, { sort: "oldest", includeHidden: true })
+    ).map((r) => r.media_id),
     ["a"],
   );
   assert.deepEqual(
-    (await media.getTrashedMedia(1, 1, { sort: "oldest" })).map(
-      (r) => r.media_id,
-    ),
+    (
+      await media.getTrashedMedia(1, 1, { sort: "oldest", includeHidden: true })
+    ).map((r) => r.media_id),
     ["b"],
   );
   assert.deepEqual(
-    (await media.getTrashedMedia(60, 0, { query: "%_" })).map(
-      (r) => r.media_id,
-    ),
+    (
+      await media.getTrashedMedia(60, 0, { query: "%_", includeHidden: true })
+    ).map((r) => r.media_id),
     ["b"],
   );
   await media.setTrashedBatch(["a", "b"], false);
@@ -233,6 +238,40 @@ test("duplicate add reports actual inserts, existing rows and missing media sepa
     { added: 0, alreadyPresent: 1, failed: 1 },
   );
   assert.equal((await albums.getAlbums())[0].photo_count, 2);
+});
+
+test("native trash reconciliation preserves hidden albums, external restore and legacy local trash", async (t) => {
+  const { media, albums } = await fixture(t);
+  const { album, rows } = await seed(media, albums, ["system", "legacy"]);
+  const hidden = await albums.createAlbum("Private", "hidden");
+  await albums.addMediaToAlbum(rows.get("system"), hidden.id);
+  await media.setTrashedBatch(["legacy"], true);
+  await media.syncNativeTrash([
+    { id: "system", isTrashed: true },
+    { id: "legacy", isTrashed: false },
+  ]);
+  await media.reconcile(new Set(["system", "legacy"]), true);
+  assert.equal((await media.getMediaItemByMediaId("system")).native_trashed, 1);
+  assert.equal((await media.getMediaItemByMediaId("system")).is_hidden, 1);
+  assert.equal(await media.getHiddenMediaCount(), 0);
+  assert.deepEqual(
+    (await media.getLegacyTrashedMedia()).map((row) => row.media_id),
+    ["legacy"],
+  );
+  assert.deepEqual(await albums.getAlbumIdsForMedia(rows.get("system")), [
+    album.id,
+    hidden.id,
+  ]);
+  await media.syncNativeTrash([
+    { id: "system", isTrashed: false },
+    { id: "legacy", isTrashed: false },
+  ]);
+  assert.equal((await media.getMediaItemByMediaId("system")).trashed_at, null);
+  assert.ok((await media.getMediaItemByMediaId("legacy")).trashed_at);
+  assert.equal(await media.getHiddenMediaCount(), 1);
+  await media.reconcile(new Set(["legacy"]), true);
+  assert.equal(await media.getMediaItemByMediaId("system"), null);
+  assert.deepEqual(await albums.getAlbumIdsForMedia(rows.get("system")), []);
 });
 test("rename and deletion refresh store results without deleting media", async (t) => {
   const { media, albums, db } = await fixture(t);

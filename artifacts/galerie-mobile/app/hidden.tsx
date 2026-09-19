@@ -11,12 +11,15 @@ import { useGalleryPreferences } from "@/components/GalleryPreferences";
 import { useGallery, useLibraryFocus } from "@/components/GalleryProvider";
 import { MediaGrid } from "@/components/MediaGrid";
 import { MediaPermissionGate } from "@/components/MediaPermissionGate";
+import { VaultGate } from "@/components/VaultGate";
 
 export default function HiddenScreen() {
   return (
-    <MediaPermissionGate requireIndex>
-      <HiddenContent />
-    </MediaPermissionGate>
+    <VaultGate>
+      <MediaPermissionGate requireIndex>
+        <HiddenContent />
+      </MediaPermissionGate>
+    </VaultGate>
   );
 }
 function HiddenContent() {

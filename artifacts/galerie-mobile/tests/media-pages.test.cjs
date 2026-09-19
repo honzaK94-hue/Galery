@@ -22,17 +22,57 @@ let rows = [];
 let nativeAlbums = [];
 let infos = {};
 let sourceAssets = null;
+let deviceEnabled = false;
+let deviceAssets = [];
+let deviceCalls = [];
 const store = {
   getHiddenMediaIds: async () => hidden,
   getExcludedMediaIds: async () => hidden,
   getHiddenMediaCount: async () => rows.length,
-  getTrashedMediaCount: async () => rows.length,
+  getTrashedMediaCount: async (options) =>
+    rows.filter((row) => options?.includeHidden || !row.is_hidden).length,
   getMediaCountByAlbum: async () => rows.length,
   upsertBatch: async (items) => written.push(...items),
   getHiddenMedia: async (limit, offset) => rows.slice(offset, offset + limit),
-  getTrashedMedia: async (limit, offset) => rows.slice(offset, offset + limit),
+  getTrashedMedia: async (limit, offset, options) =>
+    rows
+      .filter((row) => options?.includeHidden || !row.is_hidden)
+      .slice(offset, offset + limit),
+  getLegacyTrashedMedia: async () => rows,
+  syncNativeTrash: async () => {},
   getMediaItemsByAlbum: async (_id, limit, offset) =>
     rows.slice(offset, offset + limit),
+};
+const deviceMedia = {
+  get isDeviceMediaAvailable() {
+    return deviceEnabled;
+  },
+  getDeviceMedia: async (ids) =>
+    deviceAssets.filter((item) => ids.includes(item.id)),
+  queryDeviceMedia: async (options) => {
+    deviceCalls.push(options);
+    const filtered = deviceAssets.filter(
+      (item) =>
+        (options.kind === "trash"
+          ? item.isTrashed
+          : item.isFavorite && !item.isTrashed) &&
+        !options.excludeIds?.includes(item.id) &&
+        (!options.query || item.filename.includes(options.query)),
+    );
+    filtered.sort((a, b) =>
+      options.sort === "oldest"
+        ? a.creationTime - b.creationTime
+        : b.creationTime - a.creationTime,
+    );
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? 60;
+    return {
+      items: filtered.slice(offset, offset + limit),
+      totalCount: filtered.length,
+      nextOffset: offset + limit,
+      hasMore: offset + limit < filtered.length,
+    };
+  },
 };
 const mediaLibrary = {
   SortBy: { creationTime: "creationTime" },
@@ -74,6 +114,7 @@ const original = Module._load;
 Module._load = function (name, ...rest) {
   if (name === "expo-media-library/legacy") return mediaLibrary;
   if (name === "@/db") return { mediaStore: store };
+  if (name === "../modules/galerie-device") return deviceMedia;
   return original.call(this, name, ...rest);
 };
 const { getMediaPage } = require("../lib/media.ts");
@@ -104,6 +145,62 @@ test.beforeEach(() => {
   nativeAlbums = [];
   infos = {};
   sourceAssets = null;
+  deviceEnabled = false;
+  deviceAssets = [];
+  deviceCalls = [];
+});
+
+test("Android favorites exclude hidden/local trash and reflect external favorite changes", async () => {
+  deviceEnabled = true;
+  hidden = new Set(["private", "local-trash"]);
+  deviceAssets = ["private", "local-trash", "visible", "system-trash"].map(
+    (id) => ({
+      ...asset(id),
+      isFavorite: true,
+      isTrashed: id === "system-trash",
+    }),
+  );
+  assert.deepEqual(
+    (await getMediaPage({ kind: "favorites" })).items.map((item) => item.id),
+    ["visible"],
+  );
+  deviceAssets.find((item) => item.id === "visible").isFavorite = false;
+  assert.equal((await getMediaPage({ kind: "favorites" })).totalCount, 0);
+  assert.deepEqual(deviceCalls[0].excludeIds, ["private", "local-trash"]);
+});
+
+test("system and legacy trash merge across pages in order without hidden leaks", async () => {
+  deviceEnabled = true;
+  hidden = new Set(["99", "120"]);
+  deviceAssets = Array.from({ length: 100 }, (_, index) => ({
+    ...asset(String(index)),
+    creationTime: index * 2,
+    isTrashed: true,
+  }));
+  rows = Array.from({ length: 30 }, (_, index) => ({
+    media_id: String(100 + index),
+    uri: "content://media/legacy",
+    filename: `legacy-${index}`,
+    media_type: "photo",
+    creation_time: index * 2 + 1,
+  }));
+  const collected = [];
+  let cursor;
+  let hasMore = true;
+  while (hasMore) {
+    const page = await getMediaPage({ kind: "trash" }, cursor);
+    assert.equal(page.totalCount, 128);
+    collected.push(...page.items);
+    cursor = page.cursor;
+    hasMore = page.hasMore;
+  }
+  assert.equal(collected.length, 128);
+  assert.equal(new Set(collected.map((item) => item.id)).size, 128);
+  assert.ok(collected.every((item) => !hidden.has(item.id)));
+  assert.deepEqual(
+    collected.map((item) => item.creationTime),
+    collected.map((item) => item.creationTime).sort((a, b) => b - a),
+  );
 });
 test("normal pages skip completely hidden pages and retain pagination", async () => {
   hidden = new Set(["hidden"]);
@@ -157,9 +254,15 @@ test("hidden, trash and custom album pages use lookahead without duplicates", as
     is_available: 1,
   }));
   for (const kind of ["hidden", "album", "trash"]) {
-    const first = await getMediaPage({ kind, id: "1" });
-    const second = await getMediaPage({ kind, id: "1" }, first.cursor);
-    const third = await getMediaPage({ kind, id: "1" }, second.cursor);
+    const first = await getMediaPage({ kind, id: "1", includeHidden: true });
+    const second = await getMediaPage(
+      { kind, id: "1", includeHidden: true },
+      first.cursor,
+    );
+    const third = await getMediaPage(
+      { kind, id: "1", includeHidden: true },
+      second.cursor,
+    );
     assert.equal(first.items.length, 60);
     assert.equal(second.items.length, 60);
     assert.equal(third.items.length, 1);
@@ -173,6 +276,35 @@ test("hidden, trash and custom album pages use lookahead without duplicates", as
       121,
     );
   }
+});
+
+test("legacy trash filters hidden media before pagination and counts unless explicitly unlocked", async () => {
+  rows = Array.from({ length: 130 }, (_, index) => ({
+    media_id: String(index + 1),
+    media_type: "photo",
+    uri: "content://media/item",
+    filename: "photo.jpg",
+    is_hidden: index % 2,
+  }));
+  for (const includeHidden of [false, true]) {
+    const collected = [];
+    let cursor;
+    let hasMore = true;
+    while (hasMore) {
+      const page = await getMediaPage({ kind: "trash", includeHidden }, cursor);
+      assert.equal(page.totalCount, includeHidden ? 130 : 65);
+      collected.push(...page.items);
+      cursor = page.cursor;
+      hasMore = page.hasMore;
+    }
+    assert.equal(
+      new Set(collected.map((item) => item.id)).size,
+      includeHidden ? 130 : 65,
+    );
+    if (!includeHidden)
+      assert.ok(collected.every((item) => Number(item.id) % 2 === 1));
+  }
+  assert.equal((await getMediaPage({ kind: "trash" })).totalCount, 65);
 });
 test("native cover and count exclude hidden media, including fully hidden cover pages", async () => {
   nativeAlbums = [{ id: "album", title: "Camera", assetCount: 3 }];

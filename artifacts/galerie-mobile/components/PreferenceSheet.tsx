@@ -16,7 +16,7 @@ import {
   densityLabels,
 } from "./GalleryPreferences";
 
-export type PreferenceKind = "sort" | "density" | "appearance";
+export type PreferenceKind = "sort" | "density" | "appearance" | "quality";
 export function PreferenceSheet({
   kind,
   onClose,
@@ -32,21 +32,29 @@ export function PreferenceSheet({
       ? Object.entries(sortLabels)
       : kind === "density"
         ? Object.entries(densityLabels)
-        : Object.entries({
-            dark: "Tmavý",
-            light: "Světlý",
-            system: "Podle telefonu",
-          });
+        : kind === "quality"
+          ? Object.entries({
+              high: "Vysoká kvalita",
+              balanced: "Úsporné náhledy",
+            })
+          : Object.entries({
+              dark: "Tmavý",
+              light: "Světlý",
+              system: "Podle telefonu",
+            });
   const value =
     kind === "sort"
       ? prefs.sort
       : kind === "density"
         ? prefs.density
-        : prefs.appearance;
+        : kind === "quality"
+          ? prefs.thumbnailQuality
+          : prefs.appearance;
   const titles = {
     sort: "Třídit podle",
     density: "Zobrazení časové osy",
     appearance: "Vzhled",
+    quality: "Kvalita náhledů",
   };
   const descriptions: Record<string, string> = {
     comfortable: "Větší snímky, přehledné denní oddíly",
@@ -55,12 +63,16 @@ export function PreferenceSheet({
     newest: "Datum pořízení · od nejnovějších",
     oldest: "Datum pořízení · od nejstarších",
     name: "Abecedně podle názvu souboru",
+    high: "Plné barvy fotografií, větší video náhledy, cache 32 MB",
+    balanced: "Menší spotřeba paměti a video náhledy, cache 16 MB",
   };
   const choose = (key: string) => {
     if (kind === "sort") prefs.setSort(key as typeof prefs.sort);
     if (kind === "density") prefs.setDensity(key as typeof prefs.density);
     if (kind === "appearance")
       prefs.setAppearance(key as typeof prefs.appearance);
+    if (kind === "quality")
+      prefs.setThumbnailQuality(key as typeof prefs.thumbnailQuality);
     onClose();
   };
   return (

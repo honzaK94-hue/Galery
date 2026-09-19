@@ -99,4 +99,14 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
       `);
     });
   }
+  if ((version?.user_version ?? 0) < 3) {
+    await db.withTransactionAsync(async () => {
+      // Existing v2 trash stays local until the user restores/deletes it. Native
+      // trash has its own origin so an external restore cannot clear local trash.
+      await db.execAsync(`
+        ALTER TABLE media_items ADD COLUMN native_trashed INTEGER NOT NULL DEFAULT 0;
+        PRAGMA user_version = 3;
+      `);
+    });
+  }
 }

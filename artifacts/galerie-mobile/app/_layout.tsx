@@ -13,6 +13,7 @@ import { GalleryPreferences } from "@/components/GalleryPreferences";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { StatusBar } from "expo-status-bar";
 import { ensureDatabaseReady } from "@/db";
+import { VaultProvider } from "@/components/VaultProvider";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -39,6 +40,7 @@ function RootLayoutNav() {
         <Stack.Screen name="album/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="hidden" options={{ headerShown: false }} />
         <Stack.Screen name="trash" options={{ headerShown: false }} />
+        <Stack.Screen name="favorites" options={{ headerShown: false }} />
         <Stack.Screen name="help" options={{ headerShown: false }} />
       </Stack>
     </>
@@ -102,7 +104,9 @@ export default function RootLayout() {
             <KeyboardProvider>
               <GalleryProvider>
                 <GalleryPreferences>
-                  <RootLayoutNav />
+                  <VaultProvider>
+                    <RootLayoutNav />
+                  </VaultProvider>
                 </GalleryPreferences>
               </GalleryProvider>
             </KeyboardProvider>

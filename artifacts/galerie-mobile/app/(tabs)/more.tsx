@@ -23,7 +23,7 @@ export default function MoreScreen() {
   const about = () =>
     Alert.alert(
       "Galerie",
-      "Tvé fotky. Jak to má být.\n\nMístní fotografie, videa a vlastní alba. Vaše média se nikam nenahrávají. Skrytí a koš platí uvnitř této aplikace.",
+      "Galerie 1.1.0\n\nMístní fotografie, videa, alba, oblíbené a systémový koš. Skrytou část chrání zámek telefonu. Vaše média se nikam automaticky nenahrávají.",
     );
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -50,6 +50,12 @@ export default function MoreScreen() {
       >
         <MenuCard
           items={[
+            {
+              label: "Oblíbené",
+              icon: "heart",
+              description: "Fotografie a videa označené srdíčkem",
+              onPress: () => router.push("/favorites"),
+            },
             {
               label: "Skryté",
               icon: "lock",

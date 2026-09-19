@@ -22,6 +22,8 @@ import { useGalleryPreferences } from "@/components/GalleryPreferences";
 import { useLibraryFocus } from "@/components/GalleryProvider";
 import { MediaGrid } from "@/components/MediaGrid";
 import { MediaPermissionGate } from "@/components/MediaPermissionGate";
+import { VaultGate } from "@/components/VaultGate";
+import { useVault } from "@/components/VaultProvider";
 
 export default function AlbumScreen() {
   return (
@@ -34,6 +36,7 @@ function AlbumContent() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const albumId = Number(id);
   const colors = useColors();
+  const vault = useVault();
   const { sort, density } = useGalleryPreferences();
   const [album, setAlbum] = useState<AlbumRow | null>(null);
   const [count, setCount] = useState(0);
@@ -84,6 +87,7 @@ function AlbumContent() {
   };
   const save = async () => {
     if (mutating.current || !name.trim()) return;
+    if (album?.type === "hidden" && !vault.canAccess()) return;
     mutating.current = true;
     setBusy(true);
     setRenameError(null);
@@ -105,6 +109,7 @@ function AlbumContent() {
   };
   const remove = () => {
     if (!album || mutating.current) return;
+    if (album.type === "hidden" && !vault.canAccess()) return;
     Alert.alert(
       "Smazat album?",
       album.type === "hidden"
@@ -117,6 +122,7 @@ function AlbumContent() {
           style: "destructive",
           onPress: async () => {
             if (mutating.current) return;
+            if (album.type === "hidden" && !vault.canAccess()) return;
             mutating.current = true;
             setBusy(true);
             try {
@@ -139,7 +145,7 @@ function AlbumContent() {
   const menu = () => {
     if (!album || busy) return;
     Alert.alert(
-      album.name,
+      album.type === "hidden" ? "Skryté album" : album.name,
       album.type === "hidden" ? "Skryté album" : "Vlastní album",
       [
         {
@@ -205,7 +211,7 @@ function AlbumContent() {
       ) : null}
     </GalleryHeader>
   );
-  return (
+  const content = (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       {album ? (
         <MediaGrid
@@ -341,6 +347,11 @@ function AlbumContent() {
         </KeyboardAvoidingView>
       </Modal>
     </View>
+  );
+  return album?.type === "hidden" ? (
+    <VaultGate onBack={back}>{content}</VaultGate>
+  ) : (
+    content
   );
 }
 

@@ -22,6 +22,8 @@ import {
 import { MediaThumbnail } from "./MediaThumbnail";
 import { CreateAlbumModal } from "./CreateAlbumModal";
 import { albumCountLabel } from "./AlbumCards";
+import { VaultGate } from "./VaultGate";
+import { useVault, useVaultProtection } from "./VaultProvider";
 
 type Props = {
   visible: boolean;
@@ -44,6 +46,8 @@ export function AddToAlbumModal({
   onAdded,
 }: Props) {
   const colors = useColors();
+  const vault = useVault();
+  const protection = useVaultProtection(visible);
   const insets = useSafeAreaInsets();
   const [type, setType] = useState<AlbumType>(initialType);
   const [albums, setAlbums] = useState<AlbumWithCount[]>([]);
@@ -54,6 +58,14 @@ export function AddToAlbumModal({
   const generation = useRef(0);
   const addingRef = useRef(false);
   const snapshot = useRef<string[]>([]);
+  useEffect(() => {
+    if (visible && protection.error) {
+      Alert.alert("Ochrana skrytých alb", protection.error, [
+        { text: "Zavřít", style: "cancel", onPress: onClose },
+        { text: "Zkusit znovu", onPress: protection.retry },
+      ]);
+    }
+  }, [visible, protection.error, protection.retry, onClose]);
   useEffect(
     () => () => {
       generation.current++;
@@ -68,6 +80,11 @@ export function AddToAlbumModal({
   }, [visible, initialType]);
   const load = useCallback(async () => {
     const current = ++generation.current;
+    if (type === "hidden" && !vault.canAccess()) {
+      setAlbums([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -79,7 +96,7 @@ export function AddToAlbumModal({
     } finally {
       if (generation.current === current) setLoading(false);
     }
-  }, [type]);
+  }, [type, vault.canAccess, vault.ready, vault.enabled, vault.unlocked]);
   useEffect(() => {
     if (visible && !creating) void load();
   }, [visible, creating, load]);
@@ -88,11 +105,15 @@ export function AddToAlbumModal({
     addingRef.current = true;
     setAdding(true);
     try {
+      const album = await albumStore.getAlbumById(albumId);
+      if (!album) throw new Error("Album už není dostupné.");
+      if (album.type === "hidden" && !vault.canAccess()) return;
       const idMap = await mediaStore.getMediaItemIdsByMediaIds(ids);
       const rowIds = [...new Set(ids)].flatMap((id) => {
         const row = idMap.get(id);
         return row == null ? [] : [row];
       });
+      if (album.type === "hidden" && !vault.canAccess()) return;
       const result = await albumStore.addMediaBatchToAlbum(rowIds, albumId);
       onAdded(
         albumId,
@@ -110,10 +131,102 @@ export function AddToAlbumModal({
       setAdding(false);
     }
   };
+  const albumList = (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Vytvořit nové album a přidat výběr"
+        disabled={adding}
+        onPress={() => setCreating(true)}
+        style={[styles.create, { backgroundColor: colors.accent }]}
+      >
+        <Feather name="plus" size={20} color={colors.primary} />
+        <Text style={[styles.createLabel, { color: colors.primary }]}>
+          Nové album
+        </Text>
+      </Pressable>
+      {loading ? (
+        <ActivityIndicator color={colors.primary} style={styles.loader} />
+      ) : error ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void load()}
+          style={styles.loader}
+        >
+          <Text style={{ color: colors.destructive }}>{error}</Text>
+        </Pressable>
+      ) : (
+        <FlatList
+          data={albums.filter((album) => album.type === type)}
+          keyExtractor={(album) => String(album.id)}
+          style={styles.list}
+          contentContainerStyle={{ paddingBottom: 8 }}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={
+            <Text style={[styles.empty, { color: colors.mutedForeground }]}>
+              Zatím žádná {type === "hidden" ? "skrytá " : ""}alba. Vytvořte
+              nové výše.
+            </Text>
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              testID={`album-picker-item-${item.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={`${item.name}, ${albumCountLabel(item.photo_count)}`}
+              disabled={adding}
+              onPress={() => void add(item.id)}
+              style={({ pressed }) => [
+                styles.albumRow,
+                {
+                  borderColor: colors.border,
+                  opacity: adding ? 0.45 : pressed ? 0.75 : 1,
+                },
+              ]}
+            >
+              <View style={[styles.cover, { backgroundColor: colors.muted }]}>
+                {item.cover_uri ? (
+                  <MediaThumbnail
+                    uri={item.cover_uri}
+                    video={item.cover_type === "video"}
+                    width={60}
+                    height={60}
+                  />
+                ) : (
+                  <Feather
+                    name={type === "hidden" ? "eye-off" : "folder"}
+                    size={22}
+                    color={colors.mutedForeground}
+                  />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.albumName, { color: colors.foreground }]}
+                >
+                  {item.name}
+                </Text>
+                <Text
+                  style={[styles.subtitle, { color: colors.mutedForeground }]}
+                >
+                  {albumCountLabel(item.photo_count)}
+                </Text>
+              </View>
+              <Feather
+                name="chevron-right"
+                size={19}
+                color={colors.mutedForeground}
+              />
+            </Pressable>
+          )}
+        />
+      )}
+    </>
+  );
   return (
     <>
       <Modal
-        visible={visible && !creating}
+        visible={visible && protection.ready && !creating}
         transparent
         animationType="slide"
         onRequestClose={() => {
@@ -200,100 +313,10 @@ export function AddToAlbumModal({
                 ? "Přidaná média se skryjí z běžných přehledů Galerie."
                 : "Přidání do normálního alba neobnovuje skryté položky."}
             </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Vytvořit nové album a přidat výběr"
-              disabled={adding}
-              onPress={() => setCreating(true)}
-              style={[styles.create, { backgroundColor: colors.accent }]}
-            >
-              <Feather name="plus" size={20} color={colors.primary} />
-              <Text style={[styles.createLabel, { color: colors.primary }]}>
-                Nové album
-              </Text>
-            </Pressable>
-            {loading ? (
-              <ActivityIndicator color={colors.primary} style={styles.loader} />
-            ) : error ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => void load()}
-                style={styles.loader}
-              >
-                <Text style={{ color: colors.destructive }}>{error}</Text>
-              </Pressable>
+            {type === "hidden" ? (
+              <VaultGate compact>{albumList}</VaultGate>
             ) : (
-              <FlatList
-                data={albums}
-                keyExtractor={(album) => String(album.id)}
-                style={styles.list}
-                contentContainerStyle={{ paddingBottom: 8 }}
-                keyboardShouldPersistTaps="handled"
-                ListEmptyComponent={
-                  <Text
-                    style={[styles.empty, { color: colors.mutedForeground }]}
-                  >
-                    Zatím žádná {type === "hidden" ? "skrytá " : ""}alba.
-                    Vytvořte nové výše.
-                  </Text>
-                }
-                renderItem={({ item }) => (
-                  <Pressable
-                    testID={`album-picker-item-${item.id}`}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.name}, ${albumCountLabel(item.photo_count)}`}
-                    disabled={adding}
-                    onPress={() => void add(item.id)}
-                    style={({ pressed }) => [
-                      styles.albumRow,
-                      {
-                        borderColor: colors.border,
-                        opacity: adding ? 0.45 : pressed ? 0.75 : 1,
-                      },
-                    ]}
-                  >
-                    <View
-                      style={[styles.cover, { backgroundColor: colors.muted }]}
-                    >
-                      {item.cover_uri ? (
-                        <MediaThumbnail
-                          uri={item.cover_uri}
-                          video={item.cover_type === "video"}
-                          width={60}
-                          height={60}
-                        />
-                      ) : (
-                        <Feather
-                          name={type === "hidden" ? "eye-off" : "folder"}
-                          size={22}
-                          color={colors.mutedForeground}
-                        />
-                      )}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        numberOfLines={1}
-                        style={[styles.albumName, { color: colors.foreground }]}
-                      >
-                        {item.name}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.subtitle,
-                          { color: colors.mutedForeground },
-                        ]}
-                      >
-                        {albumCountLabel(item.photo_count)}
-                      </Text>
-                    </View>
-                    <Feather
-                      name="chevron-right"
-                      size={19}
-                      color={colors.mutedForeground}
-                    />
-                  </Pressable>
-                )}
-              />
+              albumList
             )}
             {adding ? (
               <ActivityIndicator

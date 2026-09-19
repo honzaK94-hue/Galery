@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,6 +16,8 @@ import Feather from "@expo/vector-icons/Feather";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
 import { albumStore, type AlbumRow, type AlbumType } from "@/db";
+import { VaultGate } from "./VaultGate";
+import { useVault, useVaultProtection } from "./VaultProvider";
 
 export function CreateAlbumModal({
   visible,
@@ -28,11 +31,21 @@ export function CreateAlbumModal({
   onCreated: (album: AlbumRow) => void;
 }) {
   const colors = useColors();
+  const vault = useVault();
+  const protection = useVaultProtection(visible);
   const [name, setName] = useState("");
   const [type, setType] = useState<AlbumType>(initialType);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const saving = useRef(false);
+  useEffect(() => {
+    if (visible && protection.error) {
+      Alert.alert("Ochrana skrytých alb", protection.error, [
+        { text: "Zavřít", style: "cancel", onPress: onClose },
+        { text: "Zkusit znovu", onPress: protection.retry },
+      ]);
+    }
+  }, [visible, protection.error, protection.retry, onClose]);
   useEffect(() => {
     if (visible) {
       setName("");
@@ -46,6 +59,9 @@ export function CreateAlbumModal({
     setBusy(true);
     setError(null);
     try {
+      if (type === "hidden" && !vault.canAccess()) {
+        if (!(await vault.unlock()) || !vault.canAccess()) return;
+      }
       const album = await albumStore.createAlbum(name.trim(), type);
       onCreated(album);
     } catch (e) {
@@ -61,7 +77,7 @@ export function CreateAlbumModal({
   };
   return (
     <Modal
-      visible={visible}
+      visible={visible && protection.ready}
       transparent
       animationType="fade"
       onRequestClose={() => {
@@ -96,27 +112,29 @@ export function CreateAlbumModal({
                 <Feather name="x" size={22} color={colors.mutedForeground} />
               </Pressable>
             </View>
-            <TextInput
-              accessibilityLabel="Název alba"
-              testID="input-album-name"
-              placeholder="Název alba"
-              placeholderTextColor={colors.mutedForeground}
-              autoFocus
-              maxLength={80}
-              value={name}
-              editable={!busy}
-              onChangeText={setName}
-              onSubmitEditing={() => void create()}
-              returnKeyType="done"
-              style={[
-                styles.input,
-                {
-                  color: colors.foreground,
-                  backgroundColor: colors.background,
-                  borderColor: colors.border,
-                },
-              ]}
-            />
+            {type !== "hidden" || vault.canAccess() ? (
+              <TextInput
+                accessibilityLabel="Název alba"
+                testID="input-album-name"
+                placeholder="Název alba"
+                placeholderTextColor={colors.mutedForeground}
+                autoFocus
+                maxLength={80}
+                value={name}
+                editable={!busy}
+                onChangeText={setName}
+                onSubmitEditing={() => void create()}
+                returnKeyType="done"
+                style={[
+                  styles.input,
+                  {
+                    color: colors.foreground,
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                  },
+                ]}
+              />
+            ) : null}
             <View
               accessibilityRole="tablist"
               style={[styles.types, { backgroundColor: colors.background }]}
@@ -127,7 +145,10 @@ export function CreateAlbumModal({
                   accessibilityRole="tab"
                   accessibilityState={{ selected: type === value }}
                   disabled={busy}
-                  onPress={() => setType(value)}
+                  onPress={() => {
+                    if (type === "hidden" && !vault.canAccess()) setName("");
+                    setType(value);
+                  }}
                   style={[
                     styles.typeButton,
                     {
@@ -159,6 +180,11 @@ export function CreateAlbumModal({
                 </Pressable>
               ))}
             </View>
+            {type === "hidden" ? (
+              <VaultGate compact>
+                <></>
+              </VaultGate>
+            ) : null}
             <Text
               style={[styles.description, { color: colors.mutedForeground }]}
             >

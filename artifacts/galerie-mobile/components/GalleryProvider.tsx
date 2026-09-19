@@ -15,6 +15,16 @@ import { mediaStore } from "@/db";
 import { getLibraryRevision, subscribeLibrary } from "@/db/changes";
 import { scanLibrary } from "@/lib/reconcile";
 import { isExpoGo } from "./DevelopmentBuildRequired";
+import {
+  getDeviceMedia,
+  isDeviceMediaAvailable,
+} from "../modules/galerie-device";
+import { identity } from "@/lib/media";
+import {
+  getMediaOperationRevision,
+  isMediaOperationPending,
+  subscribeMediaOperations,
+} from "@/lib/media-operation";
 
 type GalleryContextValue = {
   permission: MediaLibrary.PermissionResponse | null;
@@ -51,7 +61,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
     setVersion((v) => v + 1);
   }, []);
   const refreshPermission = useCallback(async () => {
-    if (!supported) return;
+    if (!supported || isMediaOperationPending()) return;
     const currentRequest = ++permissionRequest.current;
     try {
       const next = await MediaLibrary.getPermissionsAsync(false, [
@@ -60,6 +70,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       ]);
       if (!mounted.current || currentRequest !== permissionRequest.current)
         return;
+      if (isMediaOperationPending()) return;
       setPermission(next);
       setError(null);
       refreshLibrary();
@@ -104,6 +115,12 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       generation.current++;
       if (state === "active") void refreshPermission();
     });
+    const unsubscribeOperation = subscribeMediaOperations(() => {
+      generation.current++;
+      permissionRequest.current++;
+      if (!isMediaOperationPending() && AppState.currentState === "active")
+        void refreshPermission();
+    });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const media = MediaLibrary.addListener(() => {
       generation.current++;
@@ -117,6 +134,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       generation.current++;
       app.remove();
       media.remove();
+      unsubscribeOperation();
       clearTimeout(timer);
     };
   }, [supported, refreshPermission]);
@@ -128,9 +146,14 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
     )
       return;
     const current = generation.current;
+    const operationRevision = getMediaOperationRevision();
     let cancelled = false;
     const isCurrent = () =>
-      !cancelled && mounted.current && generation.current === current;
+      !cancelled &&
+      mounted.current &&
+      generation.current === current &&
+      !isMediaOperationPending() &&
+      getMediaOperationRevision() === operationRevision;
     void (async () => {
       try {
         const knownIds = new Set(await mediaStore.getAllMediaIds());
@@ -138,6 +161,52 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
         if (!knownIds.size) {
           setReady(true);
           setError(null);
+          return;
+        }
+        if (isDeviceMediaAvailable) {
+          // Ordinary MediaLibrary pages omit system trash. Query the known IDs
+          // including trash before deciding whether a relationship is orphaned.
+          const before = await MediaLibrary.getPermissionsAsync(false, [
+            "photo",
+            "video",
+          ]);
+          if (
+            (!before.granted && before.accessPrivileges !== "limited") ||
+            !isCurrent()
+          )
+            return;
+          const ids = [...knownIds];
+          const assets = [] as Awaited<ReturnType<typeof getDeviceMedia>>;
+          for (let offset = 0; offset < ids.length; offset += 500) {
+            assets.push(
+              ...(await getDeviceMedia(ids.slice(offset, offset + 500))),
+            );
+            if (!isCurrent()) return;
+          }
+          const after = await MediaLibrary.getPermissionsAsync(false, [
+            "photo",
+            "video",
+          ]);
+          if (
+            !isCurrent() ||
+            before.granted !== after.granted ||
+            before.accessPrivileges !== after.accessPrivileges
+          )
+            return;
+          await mediaStore.upsertBatch(assets.map(identity), isCurrent);
+          await mediaStore.syncNativeTrash(assets, isCurrent);
+          await mediaStore.reconcile(
+            new Set(assets.map((asset) => asset.id)),
+            after.granted &&
+              after.accessPrivileges !== "limited" &&
+              after.accessPrivileges !== "none",
+            isCurrent,
+            knownIds,
+          );
+          if (isCurrent()) {
+            setReady(true);
+            setError(null);
+          }
           return;
         }
         const snapshot = await scanLibrary({
@@ -154,6 +223,11 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
           isCurrent,
         });
         if (!snapshot || !isCurrent()) return;
+        // An older APK without our module cannot query Android system trash.
+        // Preserve those identities until a capable build can verify them.
+        for (const id of await mediaStore.getSystemTrashedMediaIds())
+          snapshot.ids.add(id);
+        if (!isCurrent()) return;
         await mediaStore.reconcile(
           snapshot.ids,
           snapshot.canPrune,
