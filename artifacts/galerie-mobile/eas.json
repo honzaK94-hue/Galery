@@ -6,6 +6,7 @@
   "build": {
     "development": {
       "distribution": "internal",
+      "pnpm": "10.26.1",
       "android": {
         "image": "latest",
         "buildType": "apk"
