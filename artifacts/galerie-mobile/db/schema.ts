@@ -82,4 +82,21 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
       `);
     });
   }
+  if ((version?.user_version ?? 0) < 2) {
+    await db.withTransactionAsync(async () => {
+      // Local trash keeps phone files and album relationships until permanent deletion.
+      await db.execAsync(`
+        ALTER TABLE media_items ADD COLUMN trashed_at INTEGER;
+        UPDATE media_items SET is_hidden=1 WHERE id IN (
+          SELECT ma.media_item_id FROM media_albums ma
+          JOIN albums a ON a.id=ma.album_id WHERE a.type='hidden'
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_visibility
+          ON media_items(is_hidden,is_available,trashed_at,creation_time DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS idx_media_trash
+          ON media_items(trashed_at DESC,id DESC) WHERE trashed_at IS NOT NULL;
+        PRAGMA user_version = 2;
+      `);
+    });
+  }
 }

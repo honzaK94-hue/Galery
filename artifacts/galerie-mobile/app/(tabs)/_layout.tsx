@@ -1,144 +1,142 @@
 import React from "react";
-import { LogBox, Platform, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import Feather from "@expo/vector-icons/Feather";
 import { router, Tabs, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import * as Haptics from "expo-haptics";
-import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
 import { useGallery } from "@/components/GalleryProvider";
-import { isExpoGo } from "@/components/DevelopmentBuildRequired";
 
-if (isExpoGo) {
-  LogBox.ignoreLogs([
-    "Due to changes in Androids permission requirements, Expo Go can no longer provide full access to the media library.",
-  ]);
-}
-
-// Overlay nav: three icon-only controls, no background, no text labels.
-// Active state uses primary fill; inactive is fully transparent — no container at all.
-function OverlayNav() {
+function BottomNavigation() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
   const { selectionActive } = useGallery();
   if (selectionActive) return null;
-
-  const isActive = (path: string) => {
-    if (path === "/")
-      return (
-        pathname === "/" ||
-        pathname === "/(tabs)" ||
-        pathname === "/(tabs)/index"
-      );
-    return pathname.startsWith(path);
-  };
-
-  const navigate = (path: "/" | "/albums" | "/videos") => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.navigate(path);
-  };
-
-  const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
-
-  const navIcon = (
-    path: string,
-    name: "grid" | "book-open" | "video",
-    label: string,
-  ) => {
-    const active = isActive(path);
-    return (
-      <Pressable
-        testID={`nav-${name}`}
-        onPress={() => navigate(path as "/" | "/albums" | "/videos")}
-        style={({ pressed }) => [styles.navBtn, { opacity: pressed ? 0.6 : 1 }]}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        accessibilityState={{ selected: active }}
-      >
-        {/* Active: filled primary pill. Inactive: bare icon only, no background. */}
-        {active ? (
-          <View
-            style={[styles.navIconActive, { backgroundColor: colors.primary }]}
-          >
-            <Feather name={name} size={20} color={colors.primaryForeground} />
-          </View>
-        ) : (
-          <View
-            style={[
-              styles.navIconInactive,
-              {
-                backgroundColor: colors.background + "E6",
-                borderRadius: nativeTheme.radius,
-              },
-            ]}
-          >
-            <Feather name={name} size={24} color={colors.foreground} />
-          </View>
-        )}
-      </Pressable>
-    );
-  };
-
+  const destinations = [
+    { path: "/" as const, icon: "image" as const, label: "Fotky" },
+    { path: "/videos" as const, icon: "video" as const, label: "Videa" },
+    { path: "/albums" as const, icon: "folder" as const, label: "Alba" },
+    { path: "/more" as const, icon: "more-horizontal" as const, label: "Více" },
+  ];
   return (
     <View
-      style={[styles.overlayNav, { bottom: bottomPad + 8 }]}
       pointerEvents="box-none"
+      style={[styles.position, { bottom: Math.max(insets.bottom, 8) + 6 }]}
     >
-      {navIcon("/", "grid", "Záběry")}
-      {navIcon("/albums", "book-open", "Alba")}
-      {navIcon("/videos", "video", "Videa")}
+      <View
+        style={[
+          styles.container,
+          {
+            backgroundColor: colors.background + "F5",
+            borderColor: colors.border,
+          },
+        ]}
+      >
+        {destinations.map(({ path, icon, label }) => {
+          const active =
+            path === "/"
+              ? pathname === "/" || pathname === "/(tabs)"
+              : pathname.startsWith(path);
+          return (
+            <Pressable
+              key={path}
+              accessibilityRole="tab"
+              accessibilityLabel={label}
+              accessibilityState={{ selected: active }}
+              testID={`nav-${label}`}
+              onPress={() => router.navigate(path)}
+              style={({ pressed }) => [
+                styles.item,
+                { opacity: pressed ? 0.65 : 1 },
+              ]}
+            >
+              <View
+                style={[
+                  styles.highlight,
+                  active && {
+                    backgroundColor: colors.accent,
+                    borderColor: colors.primary + "65",
+                    borderWidth: 1,
+                    shadowColor: colors.primary,
+                    shadowOpacity: 0.35,
+                    shadowRadius: 12,
+                    shadowOffset: { width: 0, height: 2 },
+                    elevation: 6,
+                  },
+                ]}
+              >
+                <Feather
+                  name={icon}
+                  size={21}
+                  color={active ? colors.primary : colors.mutedForeground}
+                />
+              </View>
+              <Text
+                style={{
+                  color: active ? colors.foreground : colors.mutedForeground,
+                  fontSize: 11,
+                  fontWeight: active ? "700" : "400",
+                  marginTop: 3,
+                }}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
-
 export default function TabLayout() {
+  const colors = useColors();
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Tabs
+        backBehavior="history"
         screenOptions={{
           headerShown: false,
           tabBarStyle: { display: "none" },
+          sceneStyle: { backgroundColor: colors.background },
         }}
       >
         <Tabs.Screen name="index" />
-        <Tabs.Screen name="albums" />
         <Tabs.Screen name="videos" />
+        <Tabs.Screen name="albums" />
+        <Tabs.Screen name="more" />
       </Tabs>
-      <OverlayNav />
+      <BottomNavigation />
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  overlayNav: {
+  position: {
     position: "absolute",
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    justifyContent: "center",
+    left: 12,
+    right: 12,
     alignItems: "center",
-    gap: 24,
     zIndex: 100,
-    pointerEvents: "box-none",
   },
-  navBtn: {
+  container: {
+    flexDirection: "row",
+    width: "100%",
+    maxWidth: 520,
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 5,
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 12,
+  },
+  item: { flex: 1, alignItems: "center", minHeight: 54 },
+  highlight: {
+    width: 48,
+    height: 32,
     alignItems: "center",
     justifyContent: "center",
-  },
-  // Active: compact filled pill using primary
-  navIconActive: {
-    width: 52,
-    height: 44,
-    borderRadius: nativeTheme.radius,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  // Inactive: no background, no border — bare icon only
-  navIconInactive: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
+    borderRadius: 13,
   },
 });

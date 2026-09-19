@@ -26,7 +26,7 @@ async function mapLimited<T, R>(
 export async function getNativeAlbums(): Promise<NativeAlbumDisplay[]> {
   const [albums, hidden] = await Promise.all([
     MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true }),
-    mediaStore.getHiddenMediaIds(),
+    mediaStore.getExcludedMediaIds(),
   ]);
   const hiddenCounts = new Map<string, number>();
   let unknownAlbum = false;

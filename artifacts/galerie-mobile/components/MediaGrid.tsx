@@ -1,4 +1,11 @@
-import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,12 +19,10 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Image } from "expo-image";
 import Feather from "@expo/vector-icons/Feather";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
-import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
 import { AddToAlbumModal } from "./AddToAlbumModal";
 import { useGallery } from "./GalleryProvider";
 import {
@@ -27,25 +32,34 @@ import {
   type PageCursor,
 } from "@/lib/media";
 import { createViewerSession, mediaRoute } from "@/lib/viewer-session";
+import {
+  createTimelineRows,
+  gridColumns,
+  type GridDensity,
+} from "@/lib/timeline";
 import { albumStore, mediaStore } from "@/db";
 import { deleteFromPhone, shareMedia } from "@/lib/media-actions";
 import { MediaThumbnail } from "./MediaThumbnail";
 
+type GridAction = "hide" | "delete" | "remove" | "share" | "trash" | "restore";
 const Tile = memo(function Tile({
   asset,
-  size,
+  width,
+  height,
   selected,
   selecting,
   onPress,
   onLongPress,
 }: {
   asset: GalleryAsset;
-  size: number;
+  width: number;
+  height: number;
   selected: boolean;
   selecting: boolean;
   onPress: (asset: GalleryAsset) => void;
   onLongPress: (asset: GalleryAsset) => void;
 }) {
+  const duration = Math.max(0, Math.floor(asset.duration || 0));
   return (
     <Pressable
       accessibilityRole="button"
@@ -56,25 +70,41 @@ const Tile = memo(function Tile({
       testID={`media-tile-${asset.id}`}
       onPress={() => onPress(asset)}
       onLongPress={() => onLongPress(asset)}
-      style={{ width: size, height: size, padding: 1 }}
+      style={[
+        styles.tile,
+        {
+          width,
+          height,
+          borderColor: selected ? "#2597FF" : "transparent",
+          borderWidth: selected ? 2 : 0,
+        },
+      ]}
     >
       <View style={{ flex: 1, opacity: selected ? 0.65 : 1 }}>
-        <MediaThumbnail uri={asset.uri} video={asset.mediaType === "video"} />
+        <MediaThumbnail
+          uri={asset.uri}
+          video={asset.mediaType === "video"}
+          width={width}
+          height={height}
+          mediaWidth={asset.width}
+          mediaHeight={asset.height}
+        />
       </View>
       {asset.mediaType === "video" ? (
         <View style={styles.badge}>
-          <Feather name="play" size={16} color="white" />
-          <Text style={styles.white}>
-            {Math.floor(asset.duration / 60)}:
-            {String(Math.floor(asset.duration % 60)).padStart(2, "0")}
+          <Feather name="play" size={13} color="white" />
+          <Text style={styles.duration}>
+            {Math.floor(duration / 60)}:{String(duration % 60).padStart(2, "0")}
           </Text>
         </View>
       ) : null}
       {selecting ? (
-        <View style={styles.check}>
+        <View
+          style={[styles.check, selected && { backgroundColor: "#168BEE" }]}
+        >
           <Feather
-            name={selected ? "check-circle" : "circle"}
-            size={24}
+            name={selected ? "check" : "circle"}
+            size={18}
             color="white"
           />
         </View>
@@ -88,22 +118,40 @@ export function MediaGrid({
   header,
   emptyText = "Žádná média",
   bottomTabs = false,
+  query,
+  sort,
+  density = "comfortable",
+  selectionRequest = 0,
+  onCountChange,
 }: {
   source: MediaSource;
   header?: React.ReactElement;
   emptyText?: string;
   bottomTabs?: boolean;
+  query?: string;
+  sort?: "newest" | "oldest" | "name";
+  density?: GridDensity;
+  selectionRequest?: number;
+  onCountChange?: (count: number | null) => void;
 }) {
   const colors = useColors();
-  const { width } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+  const [containerWidth, setContainerWidth] = useState(windowWidth);
   const insets = useSafeAreaInsets();
   const { revision, setSelectionActive, refreshLibrary } = useGallery();
   const [busy, setBusy] = useState(false);
-  const columns = Math.max(
-    source.kind === "videos" ? 2 : 3,
-    Math.floor(width / (source.kind === "videos" ? 190 : 130)),
+  const columns = gridColumns(
+    containerWidth,
+    source.kind === "videos",
+    density,
   );
+  const tileWidth = Math.max(
+    1,
+    (containerWidth - 24 - (columns - 1) * 4) / columns,
+  );
+  const tileHeight = source.kind === "videos" ? tileWidth / 1.6 : tileWidth;
   const [items, setItems] = useState<GalleryAsset[]>([]);
+  const [totalCount, setTotalCount] = useState<number | undefined>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -113,12 +161,33 @@ export function MediaGrid({
   const [picker, setPicker] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const generation = useRef(0);
+  const focused = useRef(false);
+  const latestRevision = useRef(revision);
+  const seenRevision = useRef(revision);
+  latestRevision.current = revision;
   const request = useRef<number | null>(null);
+  const appliedSelectionRequest = useRef(0);
   const cursor = useRef<PageCursor>({ offset: 0 });
   const hasMore = useRef(true);
   const sourceRef = useRef(source);
-  sourceRef.current = source;
-  const sourceKey = `${source.kind}:${source.id ?? ""}`;
+  sourceRef.current = {
+    ...source,
+    query: query ?? source.query,
+    sort: sort ?? source.sort,
+  };
+  const sourceKey = JSON.stringify(sourceRef.current);
+  const hiddenContext =
+    source.kind === "hidden" || source.albumType === "hidden";
+  const rows = useMemo(
+    () =>
+      createTimelineRows(
+        items,
+        columns,
+        source.kind === "photos" && (sort ?? source.sort) !== "name",
+        density,
+      ),
+    [items, columns, source.kind, source.sort, sort, density],
+  );
   const clear = useCallback(() => {
     setSelected(new Set());
     setSelecting(false);
@@ -146,6 +215,7 @@ export function MediaGrid({
         const seen = new Set(old.map((item) => item.id));
         return [...old, ...page.items.filter((item) => !seen.has(item.id))];
       });
+      setTotalCount(page.totalCount);
     } catch (e) {
       if (current === generation.current)
         setError(
@@ -161,19 +231,48 @@ export function MediaGrid({
   const refresh = useCallback(() => {
     generation.current++;
     clear();
+    setItems([]);
+    setTotalCount(undefined);
     hasMore.current = true;
+    cursor.current = { offset: 0 };
     void load(true);
   }, [clear, load]);
   useFocusEffect(
     useCallback(() => {
+      focused.current = true;
+      seenRevision.current = latestRevision.current;
       refresh();
       return () => {
+        focused.current = false;
         generation.current++;
         request.current = null;
+        setItems([]);
         clear();
       };
-    }, [refresh, sourceKey, revision, clear]),
+    }, [refresh, sourceKey, clear]),
   );
+  // Inline album creation emits a DB revision before the subsequent add. Keep
+  // the picker and its selected IDs alive until that operation has finished.
+  useEffect(() => {
+    if (!focused.current || picker || seenRevision.current === revision) return;
+    seenRevision.current = revision;
+    refresh();
+  }, [revision, picker, refresh]);
+  useFocusEffect(
+    useCallback(() => {
+      if (selectionRequest > appliedSelectionRequest.current) {
+        appliedSelectionRequest.current = selectionRequest;
+        setSelecting(true);
+        setSelectionActive(true);
+      }
+    }, [selectionRequest, setSelectionActive]),
+  );
+  useEffect(() => {
+    if (totalCount !== undefined) onCountChange?.(totalCount);
+    else if (!loading && !error && !hasMore.current)
+      onCountChange?.(items.length);
+    else onCountChange?.(null);
+  }, [totalCount, loading, error, items.length, onCountChange]);
   useEffect(() => {
     if (!selecting) return;
     const back = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -189,22 +288,25 @@ export function MediaGrid({
   }, [message]);
   const onPress = useCallback(
     (asset: GalleryAsset) => {
-      if (selecting) {
+      if (selecting)
         setSelected((old) => {
           const next = new Set(old);
           if (next.has(asset.id)) next.delete(asset.id);
           else next.add(asset.id);
           return next;
         });
-      } else {
-        const key = createViewerSession(
-          items,
-          sourceRef.current,
-          cursor.current,
-          hasMore.current,
+      else
+        router.push(
+          mediaRoute(
+            asset.id,
+            createViewerSession(
+              items,
+              sourceRef.current,
+              cursor.current,
+              hasMore.current,
+            ),
+          ),
         );
-        router.push(mediaRoute(asset.id, key));
-      }
     },
     [selecting, items],
   );
@@ -243,13 +345,20 @@ export function MediaGrid({
       if (current === generation.current) setSelectingAll(false);
     }
   }, []);
-  const action = async (kind: "hide" | "delete" | "remove" | "share") => {
+  const action = async (kind: GridAction) => {
     if (busy || !selected.size) return;
     setBusy(true);
     const ids = [...selected];
     try {
-      if (kind === "hide")
-        await mediaStore.setHiddenBatch(ids, source.kind !== "hidden");
+      if (kind === "hide") await mediaStore.setHiddenBatch(ids, !hiddenContext);
+      if (kind === "trash" || kind === "restore") {
+        await mediaStore.setTrashedBatch(ids, kind === "trash");
+        setMessage(
+          kind === "trash"
+            ? "Přesunuto do koše Galerie"
+            : "Obnoveno z koše Galerie",
+        );
+      }
       if (kind === "delete") {
         if (!(await deleteFromPhone(ids))) return;
         refreshLibrary();
@@ -271,8 +380,42 @@ export function MediaGrid({
       setBusy(false);
     }
   };
+  const actions: GridAction[] =
+    source.kind === "trash"
+      ? ["restore", "delete"]
+      : [
+          "hide",
+          ...(source.kind === "album" ? ["remove" as const] : []),
+          "share",
+          "trash",
+          "delete",
+        ];
+  const labels: Record<GridAction, string> = {
+    hide: hiddenContext ? "Obnovit" : "Skrýt",
+    remove: "Odebrat z alba",
+    share: "Sdílet",
+    trash: "Do koše",
+    restore: "Obnovit",
+    delete: "Smazat z telefonu",
+  };
+  const icons: Record<
+    GridAction,
+    React.ComponentProps<typeof Feather>["name"]
+  > = {
+    hide: hiddenContext ? "eye" : "eye-off",
+    remove: "minus-circle",
+    share: "share-2",
+    trash: "archive",
+    restore: "rotate-ccw",
+    delete: "trash-2",
+  };
   return (
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <View
+      onLayout={({ nativeEvent }) =>
+        setContainerWidth(nativeEvent.layout.width)
+      }
+      style={[styles.root, { backgroundColor: colors.background }]}
+    >
       {header}
       {error ? (
         <Pressable
@@ -286,23 +429,33 @@ export function MediaGrid({
         </Pressable>
       ) : null}
       <FlatList
-        key={columns}
-        data={items}
+        data={rows}
         extraData={selected}
-        keyExtractor={(item) => item.id}
-        numColumns={columns}
-        renderItem={({ item }) => (
-          <Tile
-            asset={item}
-            size={width / columns}
-            selected={selected.has(item.id)}
-            selecting={selecting}
-            onPress={onPress}
-            onLongPress={onLongPress}
-          />
-        )}
-        initialNumToRender={24}
-        maxToRenderPerBatch={18}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) =>
+          item.kind === "heading" ? (
+            <Text style={[styles.heading, { color: colors.foreground }]}>
+              {item.label}
+            </Text>
+          ) : (
+            <View style={styles.mediaRow}>
+              {item.items.map((asset) => (
+                <Tile
+                  key={asset.id}
+                  asset={asset}
+                  width={tileWidth}
+                  height={tileHeight}
+                  selected={selected.has(asset.id)}
+                  selecting={selecting}
+                  onPress={onPress}
+                  onLongPress={onLongPress}
+                />
+              ))}
+            </View>
+          )
+        }
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
         windowSize={5}
         onEndReached={() => {
           if (!selectingAll) void load();
@@ -320,18 +473,31 @@ export function MediaGrid({
             {loading ? (
               <ActivityIndicator color={colors.primary} />
             ) : (
-              <Text style={{ color: colors.mutedForeground }}>{emptyText}</Text>
+              <>
+                <Feather
+                  name={source.kind === "trash" ? "trash-2" : "image"}
+                  color={colors.mutedForeground}
+                  size={34}
+                />
+                <Text
+                  style={[styles.emptyText, { color: colors.mutedForeground }]}
+                >
+                  {query ? "Žádné odpovídající položky" : emptyText}
+                </Text>
+              </>
             )}
           </View>
         }
         ListFooterComponent={
           loading && items.length ? (
-            <ActivityIndicator color={colors.primary} />
+            <ActivityIndicator style={{ padding: 20 }} color={colors.primary} />
           ) : null
         }
         contentContainerStyle={{
+          paddingTop: source.kind === "photos" ? 0 : 8,
+          paddingHorizontal: 12,
           paddingBottom:
-            (selecting ? 130 : bottomTabs ? 80 : 16) + insets.bottom,
+            (selecting ? 158 : bottomTabs ? 98 : 20) + insets.bottom,
           flexGrow: items.length ? undefined : 1,
         }}
       />
@@ -340,13 +506,14 @@ export function MediaGrid({
           style={[
             styles.actions,
             {
-              backgroundColor: colors.background,
-              paddingBottom: insets.bottom + 8,
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              paddingBottom: insets.bottom + 10,
             },
           ]}
         >
           <View style={styles.row}>
-            <Text style={{ color: colors.foreground }}>
+            <Text style={[styles.selectionCount, { color: colors.foreground }]}>
               {selectingAll
                 ? `Načítám výběr: ${selectionProgress}`
                 : `Vybráno: ${selected.size}`}
@@ -360,72 +527,66 @@ export function MediaGrid({
               <Text style={{ color: colors.primary }}>Zrušit</Text>
             </Pressable>
           </View>
-          <ScrollView horizontal contentContainerStyle={styles.row}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.actionRow}
+          >
             <Pressable
               accessibilityRole="button"
               disabled={selectingAll || busy}
               onPress={() => void selectAll()}
-              style={styles.button}
+              style={styles.actionButton}
             >
-              <Text style={{ color: colors.primary }}>Vybrat vše</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={!selected.size || selectingAll || busy}
-              onPress={() => setPicker(true)}
-              style={styles.button}
-            >
-              <Text
-                style={{
-                  color: selected.size
-                    ? colors.primary
-                    : colors.mutedForeground,
-                }}
-              >
-                Přidat do alba
+              <Feather name="check-square" size={20} color={colors.primary} />
+              <Text style={[styles.actionLabel, { color: colors.primary }]}>
+                Vybrat vše
               </Text>
             </Pressable>
-            {(
-              [
-                "hide",
-                ...(source.kind === "album" ? ["remove"] : []),
-                "share",
-                "delete",
-              ] as const
-            ).map((kind) => (
+            {source.kind !== "trash" ? (
               <Pressable
-                key={kind}
                 accessibilityRole="button"
-                disabled={
-                  busy ||
-                  selectingAll ||
-                  !selected.size ||
-                  (kind === "share" && selected.size !== 1)
-                }
-                onPress={() =>
-                  void action(kind as "hide" | "remove" | "share" | "delete")
-                }
-                style={styles.button}
+                disabled={!selected.size || selectingAll || busy}
+                onPress={() => setPicker(true)}
+                style={[
+                  styles.actionButton,
+                  { opacity: selected.size ? 1 : 0.4 },
+                ]}
               >
-                <Text
-                  style={{
-                    color:
-                      kind === "delete" ? colors.destructive : colors.primary,
-                    opacity: kind === "share" && selected.size !== 1 ? 0.4 : 1,
-                  }}
-                >
-                  {kind === "hide"
-                    ? source.kind === "hidden"
-                      ? "Obnovit"
-                      : "Skrýt"
-                    : kind === "remove"
-                      ? "Odebrat z alba"
-                      : kind === "share"
-                        ? "Sdílet (1)"
-                        : "Smazat z telefonu"}
+                <Feather name="folder-plus" size={20} color={colors.primary} />
+                <Text style={[styles.actionLabel, { color: colors.primary }]}>
+                  {hiddenContext ? "Do skrytého alba" : "Do alba"}
                 </Text>
               </Pressable>
-            ))}
+            ) : null}
+            {actions.map((kind) => {
+              const disabled =
+                busy ||
+                selectingAll ||
+                !selected.size ||
+                (kind === "share" && selected.size !== 1);
+              const color =
+                kind === "delete" ? colors.destructive : colors.primary;
+              return (
+                <Pressable
+                  key={kind}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    kind === "share"
+                      ? "Sdílet jednu vybranou položku"
+                      : labels[kind]
+                  }
+                  disabled={disabled}
+                  onPress={() => void action(kind)}
+                  style={[styles.actionButton, { opacity: disabled ? 0.4 : 1 }]}
+                >
+                  <Feather name={icons[kind]} size={20} color={color} />
+                  <Text style={[styles.actionLabel, { color }]}>
+                    {labels[kind]}
+                  </Text>
+                </Pressable>
+              );
+            })}
             {busy ? <ActivityIndicator color={colors.primary} /> : null}
           </ScrollView>
         </View>
@@ -433,14 +594,18 @@ export function MediaGrid({
       {message ? (
         <View
           pointerEvents="none"
-          style={[styles.toast, { backgroundColor: colors.foreground }]}
+          style={[
+            styles.toast,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
         >
-          <Text style={{ color: colors.background }}>{message}</Text>
+          <Text style={{ color: colors.foreground }}>{message}</Text>
         </View>
       ) : null}
       <AddToAlbumModal
         visible={picker}
         selectedMediaIds={[...selected]}
+        initialType={hiddenContext ? "hidden" : "normal"}
         onClose={() => setPicker(false)}
         onAdded={(_id, added, existing = 0, failed = 0) => {
           clear();
@@ -454,36 +619,61 @@ export function MediaGrid({
 }
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  tile: { borderRadius: 9, overflow: "hidden", backgroundColor: "#102536" },
+  mediaRow: { flexDirection: "row", gap: 4, marginBottom: 4 },
+  heading: {
+    fontSize: 13,
+    fontWeight: "600",
+    paddingTop: 18,
+    paddingBottom: 9,
+    letterSpacing: 0.1,
+  },
   empty: {
     flex: 1,
-    padding: 40,
+    padding: 32,
     alignItems: "center",
     justifyContent: "center",
+    gap: 14,
   },
+  emptyText: { textAlign: "center", fontSize: 14, lineHeight: 21 },
   badge: {
     position: "absolute",
-    bottom: 6,
-    left: 6,
+    bottom: 7,
+    left: 7,
     flexDirection: "row",
-    gap: 5,
-    padding: 4,
-    borderRadius: 6,
-    backgroundColor: "#0009",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 5,
+    borderRadius: 5,
+    backgroundColor: "#00121DD9",
   },
-  white: { color: "#fff", fontSize: 12 },
+  duration: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
+  },
   check: {
     position: "absolute",
     right: 6,
     top: 6,
-    backgroundColor: "#0008",
+    backgroundColor: "#00121DBB",
     borderRadius: 14,
+    width: 26,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
   },
   actions: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: 1,
   },
   row: {
     flexDirection: "row",
@@ -491,13 +681,26 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
+  selectionCount: { fontSize: 14, fontWeight: "600" },
   button: { minHeight: 44, padding: 12, justifyContent: "center" },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  actionButton: {
+    minHeight: 64,
+    minWidth: 68,
+    paddingHorizontal: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  actionLabel: { fontSize: 11, fontWeight: "500" },
   notice: { padding: 16 },
   toast: {
     position: "absolute",
-    bottom: 140,
+    bottom: 150,
     alignSelf: "center",
+    maxWidth: "90%",
     padding: 14,
-    borderRadius: nativeTheme.radius,
+    borderRadius: 14,
+    borderWidth: 1,
   },
 });

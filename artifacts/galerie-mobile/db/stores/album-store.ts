@@ -75,11 +75,13 @@ export class AlbumStore {
       db.getAllAsync<AlbumWithCount>(
         `SELECT a.*,
       (SELECT COUNT(*) FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
-        WHERE ma.album_id=a.id AND m.is_hidden=0 AND m.is_available=1) AS photo_count,
+        WHERE ma.album_id=a.id AND m.is_hidden=(a.type='hidden')
+          AND m.is_available=1 AND m.trashed_at IS NULL) AS photo_count,
       cover.media_id AS cover_media_id, cover.uri AS cover_uri, cover.media_type AS cover_type
       FROM albums a LEFT JOIN media_items cover ON cover.id=(
         SELECT m.id FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
-        WHERE ma.album_id=a.id AND m.is_hidden=0 AND m.is_available=1
+        WHERE ma.album_id=a.id AND m.is_hidden=(a.type='hidden')
+          AND m.is_available=1 AND m.trashed_at IS NULL
         ORDER BY m.creation_time DESC,m.id DESC LIMIT 1)
       WHERE a.type=? ORDER BY a.created_at DESC,a.id DESC`,
         [type],
@@ -101,24 +103,31 @@ export class AlbumStore {
     ids: number[],
     albumId: number,
   ): Promise<AddMediaResult> {
+    let hiddenChanged = false;
     const result = await databaseTask(this.db, async (db) => {
       const counts: AddMediaResult = { added: 0, alreadyPresent: 0, failed: 0 };
       await db.withTransactionAsync(async () => {
-        if (
-          !(await db.getFirstAsync("SELECT id FROM albums WHERE id=?", [
-            albumId,
-          ]))
-        )
-          throw new Error("Album už neexistuje.");
+        const album = await db.getFirstAsync<{ type: AlbumType }>(
+          "SELECT type FROM albums WHERE id=?",
+          [albumId],
+        );
+        if (!album) throw new Error("Album už neexistuje.");
         for (const id of new Set(ids)) {
           if (
             !(await db.getFirstAsync(
-              "SELECT id FROM media_items WHERE id=? AND is_available=1",
+              "SELECT id FROM media_items WHERE id=? AND is_available=1 AND trashed_at IS NULL",
               [id],
             ))
           ) {
             counts.failed++;
             continue;
+          }
+          if (album.type === "hidden") {
+            const update = await db.runAsync(
+              "UPDATE media_items SET is_hidden=1 WHERE id=? AND is_hidden=0",
+              [id],
+            );
+            hiddenChanged ||= update.changes > 0;
           }
           const row = await db.runAsync(
             "INSERT OR IGNORE INTO media_albums (media_item_id,album_id) VALUES (?,?)",
@@ -130,7 +139,7 @@ export class AlbumStore {
       });
       return counts;
     });
-    if (result.added) notifyLibraryChanged();
+    if (result.added || hiddenChanged) notifyLibraryChanged();
     return result;
   }
   removeMediaFromAlbum(id: number, albumId: number): Promise<void> {

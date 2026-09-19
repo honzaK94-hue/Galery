@@ -1,27 +1,32 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image as RNImage,
   Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import Feather from "@expo/vector-icons/Feather";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
-import * as Haptics from "expo-haptics";
-import { albumStore, mediaStore, type AlbumWithCount } from "@/db";
+import {
+  albumStore,
+  mediaStore,
+  type AlbumType,
+  type AlbumWithCount,
+} from "@/db";
 import { MediaThumbnail } from "./MediaThumbnail";
+import { CreateAlbumModal } from "./CreateAlbumModal";
+import { albumCountLabel } from "./AlbumCards";
 
 type Props = {
   visible: boolean;
   selectedMediaIds: string[];
+  initialType?: AlbumType;
   onClose: () => void;
   onAdded: (
     albumId: number,
@@ -34,194 +39,283 @@ type Props = {
 export function AddToAlbumModal({
   visible,
   selectedMediaIds,
+  initialType = "normal",
   onClose,
   onAdded,
 }: Props) {
   const colors = useColors();
-  const [albums, setAlbums] = useState<
-    (AlbumWithCount & { coverUri?: string })[]
-  >([]);
-  const [loading, setLoading] = useState(true);
+  const insets = useSafeAreaInsets();
+  const [type, setType] = useState<AlbumType>(initialType);
+  const [albums, setAlbums] = useState<AlbumWithCount[]>([]);
+  const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
-
-  const loadAlbums = useCallback(async () => {
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const addingRef = useRef(false);
+  const snapshot = useRef<string[]>([]);
+  useEffect(
+    () => () => {
+      generation.current++;
+    },
+    [],
+  );
+  useEffect(() => {
+    if (visible) {
+      setType(initialType);
+      snapshot.current = [...new Set(selectedMediaIds)];
+    }
+  }, [visible, initialType]);
+  const load = useCallback(async () => {
+    const current = ++generation.current;
     setLoading(true);
+    setError(null);
     try {
-      const list = await albumStore.getAlbums("normal");
-      const withCovers = await Promise.all(
-        list.map(async (a) => {
-          let coverUri: string | undefined;
-          if (a.cover_media_id) {
-            const uri = a.cover_uri;
-            coverUri = uri ?? undefined;
-          }
-          return { ...a, coverUri };
-        }),
+      const result = await albumStore.getAlbums(type);
+      if (generation.current === current) setAlbums(result);
+    } catch {
+      if (generation.current === current)
+        setError("Alba se nepodařilo načíst. Zkuste to znovu.");
+    } finally {
+      if (generation.current === current) setLoading(false);
+    }
+  }, [type]);
+  useEffect(() => {
+    if (visible && !creating) void load();
+  }, [visible, creating, load]);
+  const add = async (albumId: number, ids = snapshot.current) => {
+    if (addingRef.current || !ids.length) return;
+    addingRef.current = true;
+    setAdding(true);
+    try {
+      const idMap = await mediaStore.getMediaItemIdsByMediaIds(ids);
+      const rowIds = [...new Set(ids)].flatMap((id) => {
+        const row = idMap.get(id);
+        return row == null ? [] : [row];
+      });
+      const result = await albumStore.addMediaBatchToAlbum(rowIds, albumId);
+      onAdded(
+        albumId,
+        result.added,
+        result.alreadyPresent,
+        result.failed + new Set(ids).size - rowIds.length,
       );
-      setAlbums(withCovers);
     } catch (e) {
       Alert.alert(
-        "Alba se nepodařilo načíst",
-        "Zavřete výběr a zkuste to znovu.",
+        "Přidání se nezdařilo",
+        e instanceof Error ? e.message : "Zkuste to znovu.",
       );
     } finally {
-      setLoading(false);
+      addingRef.current = false;
+      setAdding(false);
     }
-  }, []);
-
-  useEffect(() => {
-    if (visible) loadAlbums();
-  }, [visible, loadAlbums]);
-
-  const handleSelectAlbum = useCallback(
-    async (albumId: number) => {
-      if (selectedMediaIds.length === 0) return;
-      setAdding(true);
-      try {
-        const idMap =
-          await mediaStore.getMediaItemIdsByMediaIds(selectedMediaIds);
-        const rowIds: number[] = [];
-        for (const mid of new Set(selectedMediaIds)) {
-          const rowId = idMap.get(mid);
-          if (rowId != null) rowIds.push(rowId);
-        }
-        const result = await albumStore.addMediaBatchToAlbum(rowIds, albumId);
-        result.failed += new Set(selectedMediaIds).size - rowIds.length;
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        onAdded(albumId, result.added, result.alreadyPresent, result.failed);
-      } catch (e) {
-        Alert.alert(
-          "Přidání se nezdařilo",
-          e instanceof Error ? e.message : "Zkuste to znovu.",
-        );
-      } finally {
-        setAdding(false);
-      }
-    },
-    [selectedMediaIds, onAdded],
-  );
-
+  };
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.overlay}>
-        <View style={[styles.sheet, { backgroundColor: colors.background }]}>
-          <View style={styles.sheetHeader}>
-            <Text style={[styles.sheetTitle, { color: colors.foreground }]}>
-              Přidat do alba
-            </Text>
-            <Pressable
-              testID="btn-close-album-picker"
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.closeBtn,
-                { opacity: pressed ? 0.6 : 1 },
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Zavřít"
-            >
-              <Feather name="x" size={22} color={colors.foreground} />
-            </Pressable>
-          </View>
-
-          <Text
-            style={[styles.sheetSubtitle, { color: colors.mutedForeground }]}
+    <>
+      <Modal
+        visible={visible && !creating}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          if (!adding) onClose();
+        }}
+      >
+        <View style={styles.overlay}>
+          <View
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                paddingBottom: insets.bottom + 16,
+              },
+            ]}
           >
-            {selectedMediaIds.length}{" "}
-            {selectedMediaIds.length === 1
-              ? "vybraná položka"
-              : "vybraných položek"}
-          </Text>
-
-          {loading ? (
-            <View style={styles.inlineLoader}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          ) : albums.length === 0 ? (
-            <View style={styles.emptyPicker}>
-              <Feather
-                name="folder-plus"
-                size={32}
-                color={colors.mutedForeground}
-              />
-              <Text
-                style={[
-                  styles.emptyPickerText,
-                  { color: colors.mutedForeground },
-                ]}
+            <View style={[styles.handle, { backgroundColor: colors.border }]} />
+            <View style={styles.header}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.title, { color: colors.foreground }]}>
+                  Přidat do alba
+                </Text>
+                <Text
+                  style={[styles.subtitle, { color: colors.mutedForeground }]}
+                >
+                  {snapshot.current.length} vybraných položek
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Zavřít výběr alba"
+                disabled={adding}
+                onPress={onClose}
+                style={styles.iconButton}
               >
-                Zatím nemáte žádná alba
-              </Text>
+                <Feather name="x" size={23} color={colors.mutedForeground} />
+              </Pressable>
             </View>
-          ) : (
-            <FlatList
-              data={albums}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => (
+            <View
+              accessibilityRole="tablist"
+              style={[styles.types, { backgroundColor: colors.background }]}
+            >
+              {(["normal", "hidden"] as const).map((value) => (
                 <Pressable
-                  testID={`album-picker-item-${item.id}`}
-                  onPress={() => handleSelectAlbum(item.id)}
+                  key={value}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: type === value }}
                   disabled={adding}
-                  style={({ pressed }) => [
-                    styles.albumRow,
-                    { opacity: pressed ? 0.7 : adding ? 0.5 : 1 },
+                  onPress={() => setType(value)}
+                  style={[
+                    styles.typeButton,
+                    {
+                      backgroundColor:
+                        type === value ? colors.accent : "transparent",
+                    },
                   ]}
                 >
-                  {item.coverUri ? (
-                    <View style={styles.rowThumb}>
-                      <MediaThumbnail
-                        uri={item.coverUri}
-                        video={item.cover_type === "video"}
-                      />
-                    </View>
-                  ) : (
-                    <View
-                      style={[
-                        styles.rowThumb,
-                        { backgroundColor: colors.muted },
-                      ]}
-                    >
-                      <Feather
-                        name="folder"
-                        size={18}
-                        color={colors.mutedForeground}
-                      />
-                    </View>
-                  )}
-                  <View style={styles.rowInfo}>
-                    <Text
-                      style={[styles.rowName, { color: colors.foreground }]}
-                      numberOfLines={1}
-                    >
-                      {item.name}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.rowCount,
-                        { color: colors.mutedForeground },
-                      ]}
-                    >
-                      {item.photo_count}{" "}
-                      {item.photo_count === 1 ? "položka" : "položek"}
-                    </Text>
-                  </View>
                   <Feather
-                    name="chevron-right"
-                    size={20}
-                    color={colors.mutedForeground}
+                    name={value === "normal" ? "folder" : "eye-off"}
+                    size={16}
+                    color={
+                      type === value ? colors.primary : colors.mutedForeground
+                    }
                   />
+                  <Text
+                    style={[
+                      styles.typeLabel,
+                      {
+                        color:
+                          type === value
+                            ? colors.foreground
+                            : colors.mutedForeground,
+                      },
+                    ]}
+                  >
+                    {value === "normal" ? "Normální" : "Skrytá"}
+                  </Text>
                 </Pressable>
-              )}
-              showsVerticalScrollIndicator={false}
-            />
-          )}
+              ))}
+            </View>
+            <Text style={[styles.note, { color: colors.mutedForeground }]}>
+              {type === "hidden"
+                ? "Přidaná média se skryjí z běžných přehledů Galerie."
+                : "Přidání do normálního alba neobnovuje skryté položky."}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Vytvořit nové album a přidat výběr"
+              disabled={adding}
+              onPress={() => setCreating(true)}
+              style={[styles.create, { backgroundColor: colors.accent }]}
+            >
+              <Feather name="plus" size={20} color={colors.primary} />
+              <Text style={[styles.createLabel, { color: colors.primary }]}>
+                Nové album
+              </Text>
+            </Pressable>
+            {loading ? (
+              <ActivityIndicator color={colors.primary} style={styles.loader} />
+            ) : error ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void load()}
+                style={styles.loader}
+              >
+                <Text style={{ color: colors.destructive }}>{error}</Text>
+              </Pressable>
+            ) : (
+              <FlatList
+                data={albums}
+                keyExtractor={(album) => String(album.id)}
+                style={styles.list}
+                contentContainerStyle={{ paddingBottom: 8 }}
+                keyboardShouldPersistTaps="handled"
+                ListEmptyComponent={
+                  <Text
+                    style={[styles.empty, { color: colors.mutedForeground }]}
+                  >
+                    Zatím žádná {type === "hidden" ? "skrytá " : ""}alba.
+                    Vytvořte nové výše.
+                  </Text>
+                }
+                renderItem={({ item }) => (
+                  <Pressable
+                    testID={`album-picker-item-${item.id}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.name}, ${albumCountLabel(item.photo_count)}`}
+                    disabled={adding}
+                    onPress={() => void add(item.id)}
+                    style={({ pressed }) => [
+                      styles.albumRow,
+                      {
+                        borderColor: colors.border,
+                        opacity: adding ? 0.45 : pressed ? 0.75 : 1,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[styles.cover, { backgroundColor: colors.muted }]}
+                    >
+                      {item.cover_uri ? (
+                        <MediaThumbnail
+                          uri={item.cover_uri}
+                          video={item.cover_type === "video"}
+                          width={60}
+                          height={60}
+                        />
+                      ) : (
+                        <Feather
+                          name={type === "hidden" ? "eye-off" : "folder"}
+                          size={22}
+                          color={colors.mutedForeground}
+                        />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.albumName, { color: colors.foreground }]}
+                      >
+                        {item.name}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.subtitle,
+                          { color: colors.mutedForeground },
+                        ]}
+                      >
+                        {albumCountLabel(item.photo_count)}
+                      </Text>
+                    </View>
+                    <Feather
+                      name="chevron-right"
+                      size={19}
+                      color={colors.mutedForeground}
+                    />
+                  </Pressable>
+                )}
+              />
+            )}
+            {adding ? (
+              <ActivityIndicator
+                color={colors.primary}
+                style={{ padding: 12 }}
+              />
+            ) : null}
+          </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+      <CreateAlbumModal
+        visible={creating}
+        initialType={type}
+        onClose={() => setCreating(false)}
+        onCreated={(album) => {
+          const ids = [...snapshot.current];
+          setCreating(false);
+          setType(album.type);
+          void add(album.id, ids);
+        }}
+      />
+    </>
   );
 }
 
@@ -229,77 +323,96 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "#020711AA",
   },
   sheet: {
-    maxHeight: "70%",
-    borderTopLeftRadius: nativeTheme.radius * 3,
-    borderTopRightRadius: nativeTheme.radius * 3,
-    paddingBottom: 32,
+    maxHeight: "88%",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    paddingTop: 10,
   },
-  sheetHeader: {
+  handle: {
+    height: 4,
+    width: 36,
+    alignSelf: "center",
+    borderRadius: 4,
+    marginBottom: 8,
+  },
+  header: {
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 4,
-  },
-  sheetTitle: {
-    fontSize: 18,
-    fontFamily: nativeTheme.fonts.bold,
-  },
-  sheetSubtitle: {
-    fontSize: 14,
-    fontFamily: nativeTheme.fonts.regular,
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-  },
-  closeBtn: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  inlineLoader: {
-    paddingVertical: 40,
-    alignItems: "center",
-  },
-  emptyPicker: {
-    alignItems: "center",
-    justifyContent: "center",
     gap: 12,
-    paddingVertical: 40,
+    marginBottom: 16,
   },
-  emptyPickerText: {
-    fontSize: 15,
-    fontFamily: nativeTheme.fonts.regular,
+  title: { fontSize: 21, fontFamily: nativeTheme.fonts.bold },
+  subtitle: { fontSize: 12, lineHeight: 18, marginTop: 4 },
+  iconButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  types: {
+    marginHorizontal: 20,
+    flexDirection: "row",
+    borderRadius: 14,
+    padding: 4,
+    gap: 4,
+  },
+  typeButton: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 11,
+  },
+  typeLabel: { fontFamily: nativeTheme.fonts.medium, fontSize: 14 },
+  note: {
+    paddingHorizontal: 22,
+    fontSize: 12,
+    lineHeight: 18,
+    marginVertical: 12,
+  },
+  create: {
+    marginHorizontal: 20,
+    marginBottom: 8,
+    borderRadius: 13,
+    minHeight: 45,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  createLabel: { fontSize: 14, fontFamily: nativeTheme.fonts.medium },
+  loader: { padding: 28, alignItems: "center" },
+  list: { flexGrow: 0 },
+  empty: {
+    paddingHorizontal: 28,
+    paddingVertical: 30,
+    textAlign: "center",
+    fontSize: 14,
+    lineHeight: 21,
   },
   albumRow: {
-    flexDirection: "row",
-    alignItems: "center",
+    minHeight: 86,
     paddingHorizontal: 20,
     paddingVertical: 12,
+    flexDirection: "row",
     gap: 14,
+    alignItems: "center",
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  rowThumb: {
-    width: 48,
-    height: 48,
-    borderRadius: nativeTheme.radius,
+  cover: {
+    width: 60,
+    height: 60,
+    borderRadius: 13,
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
   },
-  rowInfo: {
-    flex: 1,
-  },
-  rowName: {
-    fontSize: 15,
-    fontFamily: nativeTheme.fonts.medium,
-  },
-  rowCount: {
-    fontSize: 13,
-    fontFamily: nativeTheme.fonts.regular,
-    marginTop: 2,
-  },
+  albumName: { fontFamily: nativeTheme.fonts.medium, fontSize: 15 },
 });

@@ -1,17 +1,38 @@
-import React from "react";
-import { Platform, Pressable, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { Platform, Pressable, TextInput, View } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
-import { router } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { DeviceOnly } from "./DeviceOnly";
 import { DevelopmentBuildRequired, isExpoGo } from "./DevelopmentBuildRequired";
 import { MediaPermissionGate } from "./MediaPermissionGate";
 import { MediaGrid } from "./MediaGrid";
+import { GalleryHeader } from "./GalleryHeader";
+import { useGalleryPreferences } from "./GalleryPreferences";
 
 export function LibraryScreen({ kind }: { kind: "photos" | "videos" }) {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
+  const prefs = useGalleryPreferences();
+  const params = useLocalSearchParams<{ search?: string }>();
+  const [searching, setSearching] = useState(false);
+  const [input, setInput] = useState("");
+  const [query, setQuery] = useState("");
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(input.trim()), 220);
+    return () => clearTimeout(timer);
+  }, [input]);
+  useEffect(() => {
+    if (params.search) setSearching(true);
+  }, [params.search]);
+  useEffect(() => {
+    setCount(null);
+  }, [query, prefs.sort]);
+  useFocusEffect(
+    useCallback(() => {
+      prefs.setLastLibrary(kind);
+    }, [kind, prefs.setLastLibrary]),
+  );
   if (Platform.OS === "web") return <DeviceOnly />;
   if (isExpoGo) return <DevelopmentBuildRequired />;
   return (
@@ -19,26 +40,81 @@ export function LibraryScreen({ kind }: { kind: "photos" | "videos" }) {
       <MediaGrid
         source={{ kind }}
         bottomTabs
-        emptyText={kind === "photos" ? "Žádné fotografie" : "Žádná videa"}
+        query={query}
+        sort={prefs.sort}
+        density={prefs.density}
+        selectionRequest={
+          prefs.selectionTarget === kind ? prefs.selectionRequest : 0
+        }
+        onCountChange={setCount}
+        emptyText={
+          query
+            ? "Žádné odpovídající soubory"
+            : kind === "photos"
+              ? "Vaše fotografie se zobrazí zde"
+              : "Vaše videa se zobrazí zde"
+        }
         header={
-          <View
-            style={{
-              paddingTop: insets.top,
-              height: insets.top + 48,
-              alignItems: "flex-end",
-              backgroundColor: colors.background,
+          <GalleryHeader
+            title={kind === "photos" ? "Fotky" : "Videa"}
+            subtitle={
+              query
+                ? `Hledání: ${query}`
+                : count === null
+                  ? "Vaše vzpomínky, na jednom místě"
+                  : `${count.toLocaleString("cs-CZ")} ${kind === "photos" ? "fotografií" : "videí"}`
+            }
+            onSearch={() => {
+              setSearching(!searching);
+              if (searching) setInput("");
             }}
           >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Nastavení"
-              testID="btn-settings"
-              onPress={() => router.push("/settings")}
-              style={{ padding: 12, marginRight: 8 }}
-            >
-              <Feather name="settings" size={24} color={colors.foreground} />
-            </Pressable>
-          </View>
+            {searching ? (
+              <View
+                style={{
+                  marginHorizontal: 16,
+                  marginBottom: 14,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  backgroundColor: colors.card,
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Feather
+                  name="search"
+                  color={colors.mutedForeground}
+                  size={18}
+                />
+                <TextInput
+                  autoFocus
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="Hledat podle názvu souboru"
+                  placeholderTextColor={colors.mutedForeground}
+                  accessibilityLabel="Hledat média"
+                  style={{
+                    flex: 1,
+                    minHeight: 46,
+                    paddingHorizontal: 10,
+                    color: colors.foreground,
+                  }}
+                />
+                <Pressable
+                  accessibilityLabel="Zrušit hledání"
+                  onPress={() => {
+                    setInput("");
+                    setSearching(false);
+                  }}
+                  style={{ padding: 8 }}
+                >
+                  <Feather name="x" color={colors.foreground} size={18} />
+                </Pressable>
+              </View>
+            ) : null}
+          </GalleryHeader>
         }
       />
     </MediaPermissionGate>

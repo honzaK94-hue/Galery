@@ -17,6 +17,7 @@ export type MediaItemRow = {
   last_seen_at: number;
   is_hidden: 0 | 1;
   is_available: 0 | 1;
+  trashed_at: number | null;
 };
 export type MediaIdentity = {
   mediaId: string;
@@ -28,6 +29,22 @@ export type MediaIdentity = {
   height?: number | null;
   duration?: number | null;
 };
+
+export type MediaQueryOptions = {
+  query?: string;
+  sort?: "newest" | "oldest" | "name";
+};
+
+function searchPattern(query?: string): string {
+  return `%${(query ?? "").trim().replace(/[\\%_]/g, "\\$&")}%`;
+}
+function mediaOrder(options?: MediaQueryOptions, alias = ""): string {
+  if (options?.sort === "oldest")
+    return `${alias}creation_time ASC, ${alias}id ASC`;
+  if (options?.sort === "name")
+    return `${alias}filename COLLATE NOCASE ASC, ${alias}id DESC`;
+  return `${alias}creation_time DESC, ${alias}id DESC`;
+}
 
 export class MediaStore {
   private db: SQLiteDatabase | null = null;
@@ -86,6 +103,50 @@ export class MediaStore {
         ),
     );
   }
+  getExcludedMediaIds(): Promise<Set<string>> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        new Set(
+          (
+            await db.getAllAsync<{ media_id: string }>(
+              "SELECT media_id FROM media_items WHERE is_hidden=1 OR trashed_at IS NOT NULL",
+            )
+          ).map((row) => row.media_id),
+        ),
+    );
+  }
+  getTrashedMediaIds(): Promise<Set<string>> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        new Set(
+          (
+            await db.getAllAsync<{ media_id: string }>(
+              "SELECT media_id FROM media_items WHERE trashed_at IS NOT NULL",
+            )
+          ).map((row) => row.media_id),
+        ),
+    );
+  }
+  getHiddenAlbumMediaIds(albumId: number): Promise<Set<string>> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        new Set(
+          (
+            await db.getAllAsync<{ media_id: string }>(
+              `SELECT m.media_id FROM media_items m
+        JOIN media_albums ma ON ma.media_item_id=m.id
+        JOIN albums a ON a.id=ma.album_id
+        WHERE a.id=? AND a.type='hidden' AND m.is_hidden=1
+          AND m.is_available=1 AND m.trashed_at IS NULL`,
+              [albumId],
+            )
+          ).map((row) => row.media_id),
+        ),
+    );
+  }
   setHidden(mediaId: string, hidden: boolean): Promise<void> {
     return this.setHiddenBatch([mediaId], hidden);
   }
@@ -101,6 +162,16 @@ export class MediaStore {
             throw new Error(
               "Položka není v místní databázi. Obnovte seznam a zkuste to znovu.",
             );
+          // Restoring is explicit: a visible item cannot remain inside a hidden album.
+          // Normal album relationships are retained, so restoration puts it back there.
+          if (!hidden) {
+            await db.runAsync(
+              `DELETE FROM media_albums WHERE media_item_id=(
+                SELECT id FROM media_items WHERE media_id=?
+              ) AND album_id IN (SELECT id FROM albums WHERE type='hidden')`,
+              [id],
+            );
+          }
         }
       });
     });
@@ -133,23 +204,106 @@ export class MediaStore {
     albumId: number,
     limit = 60,
     offset = 0,
+    options?: MediaQueryOptions,
   ): Promise<MediaItemRow[]> {
     return databaseTask(this.db, (db) =>
       db.getAllAsync<MediaItemRow>(
         `SELECT m.* FROM media_items m
-      JOIN media_albums ma ON ma.media_item_id=m.id WHERE ma.album_id=? AND m.is_hidden=0 AND m.is_available=1
-      ORDER BY m.creation_time DESC, m.id DESC LIMIT ? OFFSET ?`,
-        [albumId, limit, offset],
+      JOIN media_albums ma ON ma.media_item_id=m.id JOIN albums a ON a.id=ma.album_id
+      WHERE ma.album_id=? AND m.is_hidden=(a.type='hidden') AND m.is_available=1
+        AND m.trashed_at IS NULL AND COALESCE(m.filename,'') LIKE ? ESCAPE '\\'
+      ORDER BY ${mediaOrder(options, "m.")} LIMIT ? OFFSET ?`,
+        [albumId, searchPattern(options?.query), limit, offset],
       ),
     );
   }
-  getHiddenMedia(limit = 60, offset = 0): Promise<MediaItemRow[]> {
+  getHiddenMedia(
+    limit = 60,
+    offset = 0,
+    options?: MediaQueryOptions,
+  ): Promise<MediaItemRow[]> {
     return databaseTask(this.db, (db) =>
       db.getAllAsync<MediaItemRow>(
         `SELECT * FROM media_items
-      WHERE is_hidden=1 AND is_available=1 ORDER BY creation_time DESC, id DESC LIMIT ? OFFSET ?`,
-        [limit, offset],
+      WHERE is_hidden=1 AND is_available=1 AND trashed_at IS NULL
+        AND COALESCE(filename,'') LIKE ? ESCAPE '\\'
+      ORDER BY ${mediaOrder(options)} LIMIT ? OFFSET ?`,
+        [searchPattern(options?.query), limit, offset],
       ),
+    );
+  }
+  getTrashedMedia(
+    limit = 60,
+    offset = 0,
+    options?: MediaQueryOptions,
+  ): Promise<MediaItemRow[]> {
+    return databaseTask(this.db, (db) =>
+      db.getAllAsync<MediaItemRow>(
+        `SELECT * FROM media_items WHERE trashed_at IS NOT NULL AND is_available=1
+        AND COALESCE(filename,'') LIKE ? ESCAPE '\\'
+      ORDER BY ${options?.sort ? mediaOrder(options) : "trashed_at DESC, id DESC"}
+      LIMIT ? OFFSET ?`,
+        [searchPattern(options?.query), limit, offset],
+      ),
+    );
+  }
+  async setTrashedBatch(mediaIds: string[], trashed: boolean): Promise<void> {
+    if (!mediaIds.length) return;
+    await databaseTask(this.db, async (db) => {
+      const now = Date.now();
+      await db.withTransactionAsync(async () => {
+        for (const id of new Set(mediaIds)) {
+          // Repeated trash actions keep the original timestamp; restoration keeps
+          // the former hidden flag and all album links. Phone files are untouched.
+          const result = await db.runAsync(
+            trashed
+              ? "UPDATE media_items SET trashed_at=COALESCE(trashed_at,?) WHERE media_id=?"
+              : "UPDATE media_items SET trashed_at=? WHERE media_id=?",
+            [trashed ? now : null, id],
+          );
+          if (!result.changes)
+            throw new Error(
+              "Položka není v místní databázi. Obnovte seznam a zkuste to znovu.",
+            );
+        }
+      });
+    });
+    notifyLibraryChanged();
+  }
+  getHiddenMediaCount(): Promise<number> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        (
+          await db.getFirstAsync<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM media_items WHERE is_hidden=1 AND is_available=1 AND trashed_at IS NULL",
+          )
+        )?.count ?? 0,
+    );
+  }
+  getTrashedMediaCount(): Promise<number> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        (
+          await db.getFirstAsync<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM media_items WHERE trashed_at IS NOT NULL AND is_available=1",
+          )
+        )?.count ?? 0,
+    );
+  }
+  getMediaCountByAlbum(albumId: number): Promise<number> {
+    return databaseTask(
+      this.db,
+      async (db) =>
+        (
+          await db.getFirstAsync<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM media_items m
+        JOIN media_albums ma ON ma.media_item_id=m.id JOIN albums a ON a.id=ma.album_id
+        WHERE a.id=? AND m.is_hidden=(a.type='hidden') AND m.is_available=1 AND m.trashed_at IS NULL`,
+            [albumId],
+          )
+        )?.count ?? 0,
     );
   }
   async getMediaUriByMediaId(id: string): Promise<string | null> {

@@ -1,8 +1,9 @@
-import type { SQLiteDatabase } from 'expo-sqlite';
+import type { SQLiteDatabase } from "expo-sqlite";
+import { databaseTask } from "../queue";
 
-export type ThemePreference = 'system' | 'light' | 'dark';
+export type ThemePreference = "system" | "light" | "dark";
 
-class SettingsStore {
+export class SettingsStore {
   private db: SQLiteDatabase | null = null;
 
   setDatabase(db: SQLiteDatabase): void {
@@ -10,40 +11,34 @@ class SettingsStore {
   }
 
   async getTheme(): Promise<ThemePreference> {
-    if (!this.db) return 'system';
-    const row = await this.db.getFirstAsync<{ value: string }>(
-      `SELECT value FROM app_settings WHERE key = 'theme'`,
-    );
-    if (row?.value === 'light' || row?.value === 'dark' || row?.value === 'system') {
-      return row.value;
+    const theme = await this.getSetting("theme");
+    if (theme === "light" || theme === "dark" || theme === "system") {
+      return theme;
     }
-    return 'system';
+    return "system";
   }
 
   async setTheme(theme: ThemePreference): Promise<void> {
-    if (!this.db) return;
-    await this.db.runAsync(
-      `INSERT INTO app_settings (key, value) VALUES ('theme', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [theme],
-    );
+    await this.setSetting("theme", theme);
   }
 
   async getSetting(key: string): Promise<string | null> {
-    if (!this.db) return null;
-    const row = await this.db.getFirstAsync<{ value: string }>(
-      `SELECT value FROM app_settings WHERE key = ?`,
-      [key],
-    );
-    return row?.value ?? null;
+    return databaseTask(this.db, async (db) => {
+      const row = await db.getFirstAsync<{ value: string }>(
+        `SELECT value FROM app_settings WHERE key = ?`,
+        [key],
+      );
+      return row?.value ?? null;
+    });
   }
 
   async setSetting(key: string, value: string): Promise<void> {
-    if (!this.db) return;
-    await this.db.runAsync(
-      `INSERT INTO app_settings (key, value) VALUES (?, ?)
+    await databaseTask(this.db, (db) =>
+      db.runAsync(
+        `INSERT INTO app_settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [key, value],
+        [key, value],
+      ),
     );
   }
 }

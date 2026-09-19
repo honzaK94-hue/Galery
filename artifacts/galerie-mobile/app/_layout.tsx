@@ -9,6 +9,9 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { Platform, Pressable, Text, View } from "react-native";
 import { GalleryProvider } from "@/components/GalleryProvider";
+import { GalleryPreferences } from "@/components/GalleryPreferences";
+import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
+import { StatusBar } from "expo-status-bar";
 import { ensureDatabaseReady } from "@/db";
 
 SplashScreen.preventAutoHideAsync();
@@ -16,17 +19,29 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const colors = useColors();
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="settings"
-        options={{ headerShown: false, presentation: "modal" }}
-      />
-      <Stack.Screen name="media/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="album/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="hidden" options={{ headerShown: false }} />
-    </Stack>
+    <>
+      <StatusBar style={colors.background === "#040E19" ? "light" : "dark"} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background },
+          animation: "slide_from_right",
+        }}
+      >
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="settings"
+          options={{ headerShown: false, presentation: "modal" }}
+        />
+        <Stack.Screen name="media/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="album/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="hidden" options={{ headerShown: false }} />
+        <Stack.Screen name="trash" options={{ headerShown: false }} />
+        <Stack.Screen name="help" options={{ headerShown: false }} />
+      </Stack>
+    </>
   );
 }
 
@@ -86,7 +101,9 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <GalleryProvider>
-                <RootLayoutNav />
+                <GalleryPreferences>
+                  <RootLayoutNav />
+                </GalleryPreferences>
               </GalleryProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
