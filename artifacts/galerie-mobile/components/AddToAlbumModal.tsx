@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image as RNImage,
   Modal,
@@ -9,36 +10,49 @@ import {
   StyleSheet,
   Text,
   View,
-} from 'react-native';
-import { useColors } from '@workspace/galerie-design-system/hooks/use-colors';
-import { nativeTheme } from '@workspace/galerie-design-system/lib/native-theme';
-import { Feather } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import * as Haptics from 'expo-haptics';
-import { albumStore, mediaStore, type AlbumWithCount } from '@/db';
+} from "react-native";
+import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
+import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
+import Feather from "@expo/vector-icons/Feather";
+import { Image } from "expo-image";
+import * as Haptics from "expo-haptics";
+import { albumStore, mediaStore, type AlbumWithCount } from "@/db";
+import { MediaThumbnail } from "./MediaThumbnail";
 
 type Props = {
   visible: boolean;
   selectedMediaIds: string[];
   onClose: () => void;
-  onAdded: (albumId: number, addedCount: number) => void;
+  onAdded: (
+    albumId: number,
+    addedCount: number,
+    alreadyPresent?: number,
+    failed?: number,
+  ) => void;
 };
 
-export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }: Props) {
+export function AddToAlbumModal({
+  visible,
+  selectedMediaIds,
+  onClose,
+  onAdded,
+}: Props) {
   const colors = useColors();
-  const [albums, setAlbums] = useState<(AlbumWithCount & { coverUri?: string })[]>([]);
+  const [albums, setAlbums] = useState<
+    (AlbumWithCount & { coverUri?: string })[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
 
   const loadAlbums = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await albumStore.getAlbums('normal');
+      const list = await albumStore.getAlbums("normal");
       const withCovers = await Promise.all(
         list.map(async (a) => {
           let coverUri: string | undefined;
           if (a.cover_media_id) {
-            const uri = await mediaStore.getMediaUriByMediaId(a.cover_media_id);
+            const uri = a.cover_uri;
             coverUri = uri ?? undefined;
           }
           return { ...a, coverUri };
@@ -46,7 +60,10 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
       );
       setAlbums(withCovers);
     } catch (e) {
-      console.warn('Failed to load albums for picker:', e);
+      Alert.alert(
+        "Alba se nepodařilo načíst",
+        "Zavřete výběr a zkuste to znovu.",
+      );
     } finally {
       setLoading(false);
     }
@@ -61,19 +78,22 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
       if (selectedMediaIds.length === 0) return;
       setAdding(true);
       try {
-        const idMap = await mediaStore.getMediaItemIdsByMediaIds(selectedMediaIds);
+        const idMap =
+          await mediaStore.getMediaItemIdsByMediaIds(selectedMediaIds);
         const rowIds: number[] = [];
-        for (const mid of selectedMediaIds) {
+        for (const mid of new Set(selectedMediaIds)) {
           const rowId = idMap.get(mid);
           if (rowId != null) rowIds.push(rowId);
         }
-        if (rowIds.length > 0) {
-          await albumStore.addMediaBatchToAlbum(rowIds, albumId);
-        }
+        const result = await albumStore.addMediaBatchToAlbum(rowIds, albumId);
+        result.failed += new Set(selectedMediaIds).size - rowIds.length;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        onAdded(albumId, rowIds.length);
+        onAdded(albumId, result.added, result.alreadyPresent, result.failed);
       } catch (e) {
-        console.warn('Failed to add media to album:', e);
+        Alert.alert(
+          "Přidání se nezdařilo",
+          e instanceof Error ? e.message : "Zkuste to znovu.",
+        );
       } finally {
         setAdding(false);
       }
@@ -97,7 +117,10 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
             <Pressable
               testID="btn-close-album-picker"
               onPress={onClose}
-              style={({ pressed }) => [styles.closeBtn, { opacity: pressed ? 0.6 : 1 }]}
+              style={({ pressed }) => [
+                styles.closeBtn,
+                { opacity: pressed ? 0.6 : 1 },
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Zavřít"
             >
@@ -105,8 +128,13 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
             </Pressable>
           </View>
 
-          <Text style={[styles.sheetSubtitle, { color: colors.mutedForeground }]}>
-            {selectedMediaIds.length} {selectedMediaIds.length === 1 ? 'vybraná položka' : 'vybraných položek'}
+          <Text
+            style={[styles.sheetSubtitle, { color: colors.mutedForeground }]}
+          >
+            {selectedMediaIds.length}{" "}
+            {selectedMediaIds.length === 1
+              ? "vybraná položka"
+              : "vybraných položek"}
           </Text>
 
           {loading ? (
@@ -115,8 +143,17 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
             </View>
           ) : albums.length === 0 ? (
             <View style={styles.emptyPicker}>
-              <Feather name="folder-plus" size={32} color={colors.mutedForeground} />
-              <Text style={[styles.emptyPickerText, { color: colors.mutedForeground }]}>
+              <Feather
+                name="folder-plus"
+                size={32}
+                color={colors.mutedForeground}
+              />
+              <Text
+                style={[
+                  styles.emptyPickerText,
+                  { color: colors.mutedForeground },
+                ]}
+              >
                 Zatím nemáte žádná alba
               </Text>
             </View>
@@ -135,26 +172,48 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
                   ]}
                 >
                   {item.coverUri ? (
-                    <Image
-                      source={{ uri: item.coverUri }}
-                      style={styles.rowThumb}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                    />
+                    <View style={styles.rowThumb}>
+                      <MediaThumbnail
+                        uri={item.coverUri}
+                        video={item.cover_type === "video"}
+                      />
+                    </View>
                   ) : (
-                    <View style={[styles.rowThumb, { backgroundColor: colors.muted }]}>
-                      <Feather name="folder" size={18} color={colors.mutedForeground} />
+                    <View
+                      style={[
+                        styles.rowThumb,
+                        { backgroundColor: colors.muted },
+                      ]}
+                    >
+                      <Feather
+                        name="folder"
+                        size={18}
+                        color={colors.mutedForeground}
+                      />
                     </View>
                   )}
                   <View style={styles.rowInfo}>
-                    <Text style={[styles.rowName, { color: colors.foreground }]} numberOfLines={1}>
+                    <Text
+                      style={[styles.rowName, { color: colors.foreground }]}
+                      numberOfLines={1}
+                    >
                       {item.name}
                     </Text>
-                    <Text style={[styles.rowCount, { color: colors.mutedForeground }]}>
-                      {item.photo_count} {item.photo_count === 1 ? 'položka' : 'položek'}
+                    <Text
+                      style={[
+                        styles.rowCount,
+                        { color: colors.mutedForeground },
+                      ]}
+                    >
+                      {item.photo_count}{" "}
+                      {item.photo_count === 1 ? "položka" : "položek"}
                     </Text>
                   </View>
-                  <Feather name="chevron-right" size={20} color={colors.mutedForeground} />
+                  <Feather
+                    name="chevron-right"
+                    size={20}
+                    color={colors.mutedForeground}
+                  />
                 </Pressable>
               )}
               showsVerticalScrollIndicator={false}
@@ -169,19 +228,19 @@ export function AddToAlbumModal({ visible, selectedMediaIds, onClose, onAdded }:
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.5)",
   },
   sheet: {
-    maxHeight: '70%',
+    maxHeight: "70%",
     borderTopLeftRadius: nativeTheme.radius * 3,
     borderTopRightRadius: nativeTheme.radius * 3,
     paddingBottom: 32,
   },
   sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 4,
@@ -199,16 +258,16 @@ const styles = StyleSheet.create({
   closeBtn: {
     width: 40,
     height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   inlineLoader: {
     paddingVertical: 40,
-    alignItems: 'center',
+    alignItems: "center",
   },
   emptyPicker: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     gap: 12,
     paddingVertical: 40,
   },
@@ -217,8 +276,8 @@ const styles = StyleSheet.create({
     fontFamily: nativeTheme.fonts.regular,
   },
   albumRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 20,
     paddingVertical: 12,
     gap: 14,
@@ -227,9 +286,9 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: nativeTheme.radius,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
   rowInfo: {
     flex: 1,

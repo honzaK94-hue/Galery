@@ -10,7 +10,12 @@
       "android": {
         "image": "latest",
         "buildType": "apk"
-      }
+      },
+      "developmentClient": true
+    },
+    "preview": {
+      "extends": "development",
+      "developmentClient": false
     }
   }
 }

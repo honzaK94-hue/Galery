@@ -1,339 +1,350 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
-  Platform,
+  Alert,
+  BackHandler,
+  FlatList,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
+  useWindowDimensions,
   View,
-} from 'react-native';
-import { useColors } from '@workspace/galerie-design-system/hooks/use-colors';
-import { nativeTheme } from '@workspace/galerie-design-system/lib/native-theme';
-import { Feather } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import * as MediaLibrary from 'expo-media-library/legacy';
-import { router, useLocalSearchParams } from 'expo-router';
-import * as Haptics from 'expo-haptics';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+} from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as MediaLibrary from "expo-media-library/legacy";
+import { mediaStore } from "@/db";
+import { AddToAlbumModal } from "@/components/AddToAlbumModal";
+import { MediaPermissionGate } from "@/components/MediaPermissionGate";
+import { useGallery } from "@/components/GalleryProvider";
+import { VideoPlayer } from "@/components/VideoPlayer";
+import { ZoomablePhoto } from "@/components/ZoomablePhoto";
 import {
-  DevelopmentBuildRequired,
-  isExpoGo,
-} from '@/components/DevelopmentBuildRequired';
+  fromAsset,
+  getMediaPage,
+  identity,
+  type GalleryAsset,
+} from "@/lib/media";
+import { getViewerSession } from "@/lib/viewer-session";
+import { deleteFromPhone, shareMedia } from "@/lib/media-actions";
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const SCREEN_HEIGHT = Dimensions.get('window').height;
-
-type AssetDetails = {
-  uri: string;
-  filename: string;
-  mediaType: MediaLibrary.MediaTypeValue;
-  width: number;
-  height: number;
-  duration: number | null;
-  creationTime: number | null;
-  modificationTime: number | null;
-  isFavorite: boolean;
-};
-
-function formatDate(ts: number | null | undefined): string {
-  if (!ts) return '-';
-  return new Date(ts).toLocaleDateString('cs-CZ', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function formatDuration(secs: number | null): string {
-  if (!secs) return '-';
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function MetaRow({
-  label,
-  value,
-  onMediaColor,
-}: {
-  label: string;
-  value: string;
-  onMediaColor: string;
-}) {
+export default function MediaScreen() {
   return (
-    <View style={styles.metaRow}>
-      <Text style={[styles.metaLabel, { color: onMediaColor, opacity: 0.6 }]}>{label}</Text>
-      <Text style={[styles.metaValue, { color: onMediaColor }]} numberOfLines={2}>
-        {value}
-      </Text>
-    </View>
+    <MediaPermissionGate>
+      <Viewer />
+    </MediaPermissionGate>
   );
 }
-
-export default function MediaDetailScreen() {
-  if (isExpoGo) {
-    return <DevelopmentBuildRequired />;
-  }
-
-  return <MediaDetailContent />;
-}
-
-function MediaDetailContent() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
-  const [details, setDetails] = useState<AssetDetails | null>(null);
-  const [loading, setLoading] = useState(true);
+function Viewer() {
+  const params = useLocalSearchParams<{ id: string; session?: string }>();
+  const session = useRef(getViewerSession(params.session));
+  const [items, setItems] = useState<GalleryAsset[]>(
+    session.current?.items ?? [],
+  );
+  const [index, setIndex] = useState(
+    Math.max(
+      0,
+      items.findIndex((item) => item.id === params.id),
+    ),
+  );
+  const [asset, setAsset] = useState<GalleryAsset | null>(null);
+  const [metadata, setMetadata] = useState({ modified: 0, favorite: false });
+  const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showMeta, setShowMeta] = useState(false);
-
-  // Semantic media-surface tokens
-  const mediaBg = colors.mediaBackground;
-  const onMedia = colors.onMedia;
-
+  const [picker, setPicker] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  const [reset, setReset] = useState(0);
+  const [info, setInfo] = useState(false);
+  const [frame, setFrame] = useState({ width: 0, height: 0 });
+  const list = useRef<FlatList<GalleryAsset>>(null);
+  const loadingMore = useRef(false);
+  const mounted = useRef(true);
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { refreshLibrary, revision } = useGallery();
+  const currentId = items[index]?.id ?? params.id;
   useEffect(() => {
-    if (!id || Platform.OS === 'web') {
-      setLoading(false);
-      return;
-    }
-    (async () => {
-      setLoading(true);
-      setError(null);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setAsset(null);
+    setError(null);
+    setZoomed(false);
+    void (async () => {
       try {
-        const info = await MediaLibrary.getAssetInfoAsync(id);
-        setDetails({
-          uri: info.localUri ?? info.uri,
-          filename: info.filename,
-          mediaType: info.mediaType,
-          width: info.width,
-          height: info.height,
-          duration: info.duration,
-          creationTime: info.creationTime,
-          modificationTime: info.modificationTime,
-          isFavorite: !!info.isFavorite,
+        const detail = await MediaLibrary.getAssetInfoAsync(currentId);
+        const row = await mediaStore.getMediaItemByMediaId(currentId);
+        if (cancelled) return;
+        const resolved = {
+          ...fromAsset(detail),
+          uri:
+            detail.mediaType === "video"
+              ? detail.uri
+              : (detail.localUri ?? detail.uri),
+        };
+        await mediaStore.upsertBatch([identity(resolved)], () => !cancelled);
+        if (cancelled) return;
+        setAsset(resolved);
+        setMetadata({
+          modified: detail.modificationTime,
+          favorite: !!detail.isFavorite,
         });
+        setHidden(Boolean(row?.is_hidden));
+        if (!items.length) setItems([resolved]);
       } catch {
-        setError('Nepodařilo se načíst snímek.');
-      } finally {
-        setLoading(false);
+        if (!cancelled)
+          setError(
+            "Médium není dostupné. Mohlo být smazáno nebo se změnil přístup.",
+          );
       }
     })();
-  }, [id]);
-
-  const handleBack = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.back();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentId, reset, revision]);
+  useEffect(() => {
+    const back = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (zoomed) {
+        setReset((value) => value + 1);
+        setZoomed(false);
+        return true;
+      }
+      if (info) {
+        setInfo(false);
+        return true;
+      }
+      return false;
+    });
+    return () => back.remove();
+  }, [zoomed, info]);
+  const more = useCallback(async () => {
+    const context = session.current;
+    if (!context?.hasMore || loadingMore.current) return;
+    loadingMore.current = true;
+    try {
+      const page = await getMediaPage(
+        context.source,
+        context.cursor,
+        () => mounted.current,
+      );
+      if (!mounted.current) return;
+      context.cursor = page.cursor;
+      context.hasMore = page.hasMore;
+      const seen = new Set(context.items.map((item) => item.id));
+      context.items = [
+        ...context.items,
+        ...page.items.filter((item) => !seen.has(item.id)),
+      ];
+      setItems([...context.items]);
+    } catch {
+      if (mounted.current)
+        Alert.alert(
+          "Další média se nepodařilo načíst",
+          "Přejeďte znovu na další položku nebo obnovte seznam.",
+        );
+    } finally {
+      loadingMore.current = false;
+    }
   }, []);
-
-  const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;
-  const bottomPad = Platform.OS === 'web' ? 34 : insets.bottom;
-
-  // Web: no media library access — show fallback on app background
-  if (Platform.OS === 'web') {
-    return (
-      <View style={[styles.root, { backgroundColor: colors.background }]}>
-        <View style={[styles.header, { paddingTop: topPad + 8 }]}>
-          <Pressable testID="btn-back-media" onPress={handleBack} style={styles.headerBtn}>
-            <Feather name="arrow-left" size={22} color={colors.foreground} />
-          </Pressable>
-        </View>
-        <View style={styles.centered}>
-          <Feather name="smartphone" size={48} color={colors.mutedForeground} />
-          <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-            Náhled je dostupný pouze na zařízení.
-          </Text>
-        </View>
-      </View>
-    );
-  }
-
+  useEffect(() => {
+    if (index >= items.length - 3) void more();
+  }, [index, items.length, more]);
+  const removeCurrent = () => {
+    const next = items.filter((item) => item.id !== currentId);
+    if (session.current) session.current.items = next;
+    if (!next.length) {
+      router.back();
+      return;
+    }
+    const nextIndex = Math.min(index, next.length - 1);
+    setIndex(nextIndex);
+    setItems(next);
+    list.current?.scrollToIndex({ index: nextIndex, animated: false });
+  };
+  const action = async (kind: "hide" | "delete" | "share") => {
+    if (busy || !asset) return;
+    setBusy(true);
+    try {
+      if (kind === "share") await shareMedia(currentId);
+      if (kind === "hide") {
+        await mediaStore.setHidden(currentId, !hidden);
+        removeCurrent();
+      }
+      if (kind === "delete" && (await deleteFromPhone([currentId]))) {
+        removeCurrent();
+        refreshLibrary();
+      }
+    } catch (e) {
+      Alert.alert("Akce se nezdařila", String(e));
+      if (kind === "delete") refreshLibrary();
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+  const button = (label: string, onPress: () => void, disabled = false) => (
+    <Pressable
+      key={label}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onPress}
+      style={{ padding: 13, minHeight: 44, opacity: disabled ? 0.4 : 1 }}
+    >
+      <Text style={{ color: "white" }}>{label}</Text>
+    </Pressable>
+  );
   return (
-    // mediaBackground (#000000 in both schemes — semantic, not hardcoded)
-    <View style={[styles.root, { backgroundColor: mediaBg }]}>
-      {/* Header: icon-only buttons, no background container */}
-      <View style={[styles.header, { paddingTop: topPad + 4 }]}>
-        <Pressable
-          testID="btn-back-media"
-          onPress={handleBack}
-          style={({ pressed }) => [styles.headerBtn, { opacity: pressed ? 0.6 : 1 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Zpět"
-        >
-          <Feather name="arrow-left" size={24} color={onMedia} />
-        </Pressable>
-
-        {details && (
-          <Pressable
-            testID="btn-toggle-meta"
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setShowMeta((v) => !v);
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "#000",
+        paddingTop: insets.top,
+        paddingBottom: insets.bottom,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        {button("Zpět", () => router.back())}
+        <Text numberOfLines={1} style={{ color: "white", flex: 1 }}>
+          {asset?.filename ?? "Médium"}
+        </Text>
+        {button("Info", () => setInfo(!info))}
+      </View>
+      <View
+        style={{ flex: 1 }}
+        onLayout={(event) => setFrame(event.nativeEvent.layout)}
+      >
+        {frame.width > 0 && items.length > 0 ? (
+          <FlatList
+            ref={list}
+            key={`${width}:${frame.width}`}
+            data={items}
+            horizontal
+            pagingEnabled
+            scrollEnabled={!zoomed && !busy}
+            keyExtractor={(item) => item.id}
+            initialScrollIndex={index}
+            getItemLayout={(_, position) => ({
+              length: frame.width,
+              offset: frame.width * position,
+              index: position,
+            })}
+            windowSize={3}
+            initialNumToRender={1}
+            maxToRenderPerBatch={2}
+            removeClippedSubviews={false}
+            showsHorizontalScrollIndicator={false}
+            extraData={`${index}:${asset?.uri}:${reset}:${frame.height}:${error}`}
+            onMomentumScrollEnd={(event) => {
+              const next = Math.round(
+                event.nativeEvent.contentOffset.x / frame.width,
+              );
+              setIndex(Math.max(0, Math.min(items.length - 1, next)));
+              setInfo(false);
             }}
-            style={({ pressed }) => [styles.headerBtn, { opacity: pressed ? 0.6 : 1 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Informace"
-          >
-            <Feather name="info" size={22} color={onMedia} />
-          </Pressable>
+            onEndReached={() => void more()}
+            onEndReachedThreshold={0.5}
+            renderItem={({ item, index: position }) => (
+              <View
+                style={{
+                  width: frame.width,
+                  height: frame.height,
+                  justifyContent: "center",
+                }}
+              >
+                {position === index ? (
+                  error ? (
+                    <View style={{ padding: 24 }}>
+                      <Text style={{ color: "white" }}>{error}</Text>
+                      {button("Zkusit znovu", () =>
+                        setReset((value) => value + 1),
+                      )}
+                    </View>
+                  ) : asset?.id === item.id ? (
+                    asset.mediaType === "video" ? (
+                      <VideoPlayer key={asset.id} uri={asset.uri} />
+                    ) : (
+                      <ZoomablePhoto
+                        key={`${asset.id}:${reset}:${frame.width}:${frame.height}`}
+                        uri={asset.uri}
+                        width={frame.width}
+                        height={frame.height}
+                        imageWidth={asset.width}
+                        imageHeight={asset.height}
+                        onZoomChange={setZoomed}
+                      />
+                    )
+                  ) : (
+                    <ActivityIndicator color="white" />
+                  )
+                ) : null}
+              </View>
+            )}
+          />
+        ) : error ? (
+          <Text style={{ color: "white", padding: 24 }}>{error}</Text>
+        ) : (
+          <ActivityIndicator color="white" />
         )}
       </View>
-
-      {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.primary} size="large" />
-        </View>
-      ) : error ? (
-        <View style={styles.centered}>
-          <Feather name="alert-circle" size={36} color={colors.destructive} />
-          <Text style={[styles.emptyText, { color: onMedia }]}>{error}</Text>
-          <Pressable
-            testID="btn-retry-media"
-            onPress={handleBack}
-            style={({ pressed }) => [
-              styles.retryBtn,
-              { backgroundColor: colors.primary, opacity: pressed ? 0.8 : 1 },
-            ]}
-          >
-            <Text style={[styles.retryText, { color: colors.primaryForeground }]}>Zpět</Text>
-          </Pressable>
-        </View>
-      ) : details ? (
-        <>
-          <Image
-            source={{ uri: details.uri }}
-            style={styles.fullImage}
-            contentFit="contain"
-            transition={200}
-            cachePolicy="memory-disk"
-          />
-
-          {showMeta && (
-            <View
-              style={[
-                styles.metaPanel,
-                {
-                  // mediaBackground at ~82% opacity via hex alpha suffix
-                  backgroundColor: mediaBg + 'D1',
-                  paddingBottom: bottomPad + 12,
-                },
-              ]}
-            >
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <Text style={[styles.metaPanelTitle, { color: onMedia }]}>Informace</Text>
-                <MetaRow label="Název" value={details.filename} onMediaColor={onMedia} />
-                <MetaRow
-                  label="Typ"
-                  value={details.mediaType === MediaLibrary.MediaType.video ? 'Video' : 'Fotografie'}
-                  onMediaColor={onMedia}
-                />
-                {details.width > 0 && details.height > 0 ? (
-                  <MetaRow
-                    label="Rozměry"
-                    value={`${details.width} × ${details.height}`}
-                    onMediaColor={onMedia}
-                  />
-                ) : null}
-                {details.duration ? (
-                  <MetaRow
-                    label="Délka"
-                    value={formatDuration(details.duration)}
-                    onMediaColor={onMedia}
-                  />
-                ) : null}
-                <MetaRow label="Vytvořeno" value={formatDate(details.creationTime)} onMediaColor={onMedia} />
-                <MetaRow label="Upraveno" value={formatDate(details.modificationTime)} onMediaColor={onMedia} />
-                <MetaRow label="Oblíbené" value={details.isFavorite ? 'Ano' : 'Ne'} onMediaColor={onMedia} />
-              </ScrollView>
-            </View>
-          )}
-        </>
+      {info && asset ? (
+        <ScrollView
+          style={{ maxHeight: "30%", flexGrow: 0 }}
+          contentContainerStyle={{ padding: 12 }}
+        >
+          <Text selectable style={{ color: "white", marginBottom: 8 }}>
+            {asset.filename}
+          </Text>
+          <Text style={{ color: "white" }}>
+            {asset.mediaType === "video" ? "Video" : "Fotografie"} ·{" "}
+            {asset.width} × {asset.height} ·{" "}
+            {new Date(asset.creationTime).toLocaleString("cs-CZ")}
+            {asset.mediaType === "video"
+              ? ` · ${Math.round(asset.duration)} s`
+              : ""}
+          </Text>
+          <Text style={{ color: "white", marginTop: 8 }}>
+            Upraveno:{" "}
+            {metadata.modified
+              ? new Date(metadata.modified).toLocaleString("cs-CZ")
+              : "—"}
+          </Text>
+          <Text style={{ color: "white", marginTop: 8 }}>
+            Oblíbené: {metadata.favorite ? "Ano" : "Ne"}
+          </Text>
+        </ScrollView>
       ) : null}
+      <ScrollView
+        horizontal
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={{ alignItems: "center" }}
+      >
+        {button("Do alba", () => setPicker(true), busy || !asset)}
+        {button(
+          hidden ? "Obnovit" : "Skrýt",
+          () => void action("hide"),
+          busy || !asset,
+        )}
+        {button("Sdílet", () => void action("share"), busy || !asset)}
+        {button("Smazat", () => void action("delete"), busy || !asset)}
+        {busy ? <ActivityIndicator color="white" /> : null}
+      </ScrollView>
+      <AddToAlbumModal
+        visible={picker}
+        selectedMediaIds={[currentId]}
+        onClose={() => setPicker(false)}
+        onAdded={(_id, added, existing = 0, failed = 0) => {
+          setPicker(false);
+          Alert.alert(
+            "Přidání do alba",
+            `Přidáno: ${added}\nJiž v albu: ${existing}\nNedostupné: ${failed}`,
+          );
+        }}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1 },
-  header: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-    zIndex: 50,
-  },
-  // Icon-only header buttons: no background, no border
-  headerBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    padding: 32,
-  },
-  fullImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT,
-  },
-  metaPanel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    maxHeight: SCREEN_HEIGHT * 0.5,
-    borderTopLeftRadius: nativeTheme.radius * 2,
-    borderTopRightRadius: nativeTheme.radius * 2,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-  },
-  metaPanelTitle: {
-    fontSize: 16,
-    fontFamily: nativeTheme.fonts.bold,
-    marginBottom: 14,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    gap: 12,
-  },
-  metaLabel: {
-    fontSize: 13,
-    fontFamily: nativeTheme.fonts.regular,
-    minWidth: 90,
-  },
-  metaValue: {
-    fontSize: 13,
-    fontFamily: nativeTheme.fonts.medium,
-    flex: 1,
-    textAlign: 'right',
-  },
-  emptyText: {
-    fontSize: 15,
-    fontFamily: nativeTheme.fonts.regular,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  retryBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: nativeTheme.radius,
-  },
-  retryText: {
-    fontSize: 15,
-    fontFamily: nativeTheme.fonts.medium,
-  },
-});

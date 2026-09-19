@@ -1,14 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { KeyboardProvider } from 'react-native-keyboard-controller';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { useDesignSystemFonts } from '@workspace/galerie-design-system/hooks/use-fonts';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { Platform } from 'react-native';
-import { ensureDatabaseReady } from '@/db';
+import React, { useCallback, useEffect, useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useDesignSystemFonts } from "@workspace/galerie-design-system/hooks/use-fonts";
+import { Stack } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import { Platform, Pressable, Text, View } from "react-native";
+import { GalleryProvider } from "@/components/GalleryProvider";
+import { ensureDatabaseReady } from "@/db";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -18,34 +19,64 @@ function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="settings" options={{ headerShown: false, presentation: 'modal' }} />
+      <Stack.Screen
+        name="settings"
+        options={{ headerShown: false, presentation: "modal" }}
+      />
       <Stack.Screen name="media/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="album/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="hidden" options={{ headerShown: false }} />
     </Stack>
   );
 }
 
 export default function RootLayout() {
   const { fontsLoaded, fontError } = useDesignSystemFonts();
-  const [dbReady, setDbReady] = useState(Platform.OS === 'web');
+  const [dbReady, setDbReady] = useState(Platform.OS === "web");
 
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
+  const [dbError, setDbError] = useState(false);
+  const initialize = useCallback(() => {
+    if (Platform.OS === "web") return;
+    setDbError(false);
     ensureDatabaseReady()
       .then(() => setDbReady(true))
       .catch((e) => {
-        console.error('Database init failed:', e);
-        setDbReady(true);
+        console.error("Database init failed:", e);
+        setDbError(true);
       });
   }, []);
+  useEffect(initialize, [initialize]);
 
   useEffect(() => {
-    if ((fontsLoaded || fontError) && dbReady) {
+    if ((fontsLoaded || fontError) && (dbReady || dbError)) {
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, fontError, dbReady]);
+  }, [fontsLoaded, fontError, dbReady, dbError]);
 
   if (!fontsLoaded && !fontError) return null;
+  if (dbError)
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          padding: 24,
+          gap: 20,
+        }}
+      >
+        <Text>
+          Databázi se nepodařilo otevřít. Uložená data nebyla smazána.
+        </Text>
+        <Pressable
+          onPress={initialize}
+          accessibilityRole="button"
+          style={{ padding: 16 }}
+        >
+          <Text>Zkusit znovu</Text>
+        </Pressable>
+      </View>
+    );
   if (!dbReady) return null;
 
   return (
@@ -54,7 +85,9 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
-              <RootLayoutNav />
+              <GalleryProvider>
+                <RootLayoutNav />
+              </GalleryProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </QueryClientProvider>

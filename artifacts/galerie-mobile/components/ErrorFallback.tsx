@@ -11,7 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@workspace/galerie-design-system/hooks/use-colors';
 import { nativeTheme } from '@workspace/galerie-design-system/lib/native-theme';
-import { Feather } from '@expo/vector-icons';
+import Feather from "@expo/vector-icons/Feather";
 import { reloadAppAsync } from 'expo';
 
 export type ErrorFallbackProps = {

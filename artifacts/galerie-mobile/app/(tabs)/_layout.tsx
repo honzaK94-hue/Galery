@@ -1,16 +1,17 @@
-import React from 'react';
-import { LogBox, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { useColors } from '@workspace/galerie-design-system/hooks/use-colors';
-import { Feather } from '@expo/vector-icons';
-import { router, Tabs, usePathname } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Haptics from 'expo-haptics';
-import { nativeTheme } from '@workspace/galerie-design-system/lib/native-theme';
-import { isExpoGo } from '@/components/DevelopmentBuildRequired';
+import React from "react";
+import { LogBox, Platform, Pressable, StyleSheet, View } from "react-native";
+import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
+import Feather from "@expo/vector-icons/Feather";
+import { router, Tabs, usePathname } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Haptics from "expo-haptics";
+import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
+import { useGallery } from "@/components/GalleryProvider";
+import { isExpoGo } from "@/components/DevelopmentBuildRequired";
 
 if (isExpoGo) {
   LogBox.ignoreLogs([
-    'Due to changes in Androids permission requirements, Expo Go can no longer provide full access to the media library.',
+    "Due to changes in Androids permission requirements, Expo Go can no longer provide full access to the media library.",
   ]);
 }
 
@@ -20,25 +21,36 @@ function OverlayNav() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  const { selectionActive } = useGallery();
+  if (selectionActive) return null;
 
   const isActive = (path: string) => {
-    if (path === '/') return pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/index';
+    if (path === "/")
+      return (
+        pathname === "/" ||
+        pathname === "/(tabs)" ||
+        pathname === "/(tabs)/index"
+      );
     return pathname.startsWith(path);
   };
 
-  const navigate = (path: '/' | '/albums' | '/videos') => {
+  const navigate = (path: "/" | "/albums" | "/videos") => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push(path);
+    router.navigate(path);
   };
 
-  const bottomPad = Platform.OS === 'web' ? 34 : insets.bottom;
+  const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const navIcon = (path: string, name: 'grid' | 'book-open' | 'video', label: string) => {
+  const navIcon = (
+    path: string,
+    name: "grid" | "book-open" | "video",
+    label: string,
+  ) => {
     const active = isActive(path);
     return (
       <Pressable
         testID={`nav-${name}`}
-        onPress={() => navigate(path as '/' | '/albums' | '/videos')}
+        onPress={() => navigate(path as "/" | "/albums" | "/videos")}
         style={({ pressed }) => [styles.navBtn, { opacity: pressed ? 0.6 : 1 }]}
         accessibilityRole="button"
         accessibilityLabel={label}
@@ -46,12 +58,22 @@ function OverlayNav() {
       >
         {/* Active: filled primary pill. Inactive: bare icon only, no background. */}
         {active ? (
-          <View style={[styles.navIconActive, { backgroundColor: colors.primary }]}>
+          <View
+            style={[styles.navIconActive, { backgroundColor: colors.primary }]}
+          >
             <Feather name={name} size={20} color={colors.primaryForeground} />
           </View>
         ) : (
-          <View style={styles.navIconInactive}>
-            <Feather name={name} size={24} color={colors.onMedia} />
+          <View
+            style={[
+              styles.navIconInactive,
+              {
+                backgroundColor: colors.background + "E6",
+                borderRadius: nativeTheme.radius,
+              },
+            ]}
+          >
+            <Feather name={name} size={24} color={colors.foreground} />
           </View>
         )}
       </Pressable>
@@ -63,9 +85,9 @@ function OverlayNav() {
       style={[styles.overlayNav, { bottom: bottomPad + 8 }]}
       pointerEvents="box-none"
     >
-      {navIcon('/', 'grid', 'Záběry')}
-      {navIcon('/albums', 'book-open', 'Alba')}
-      {navIcon('/videos', 'video', 'Videa')}
+      {navIcon("/", "grid", "Záběry")}
+      {navIcon("/albums", "book-open", "Alba")}
+      {navIcon("/videos", "video", "Videa")}
     </View>
   );
 }
@@ -76,7 +98,7 @@ export default function TabLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarStyle: { display: 'none' },
+          tabBarStyle: { display: "none" },
         }}
       >
         <Tabs.Screen name="index" />
@@ -90,33 +112,33 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   overlayNav: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
     gap: 24,
     zIndex: 100,
-    pointerEvents: 'box-none',
+    pointerEvents: "box-none",
   },
   navBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   // Active: compact filled pill using primary
   navIconActive: {
     width: 52,
     height: 44,
     borderRadius: nativeTheme.radius,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   // Inactive: no background, no border — bare icon only
   navIconInactive: {
     width: 44,
     height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

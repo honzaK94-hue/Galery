@@ -1,4 +1,4 @@
-import { Feather } from "@expo/vector-icons";
+import Feather from "@expo/vector-icons/Feather";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { nativeTheme } from "@workspace/galerie-design-system/lib/native-theme";
 import { StyleSheet, Text, View } from "react-native";
@@ -27,8 +27,8 @@ export function DeviceOnly() {
       </Text>
       <Text style={[styles.body, { color: colors.mutedForeground }]}>
         Fotografie a videa uložené v zařízení jsou dostupné pouze v aplikaci pro
-        Android nebo iOS. V Replitu zvolte Náhled v telefonu a naskenujte QR kód
-        aplikací Expo Go.
+        Android. Nainstalujte APK Galerie do telefonu. Webový náhled nemá přístup
+        k jeho místní knihovně.
       </Text>
     </View>
   );

@@ -1,4 +1,4 @@
-import { Feather } from '@expo/vector-icons';
+import Feather from "@expo/vector-icons/Feather";
 import { useColors } from '@workspace/galerie-design-system/hooks/use-colors';
 import { nativeTheme } from '@workspace/galerie-design-system/lib/native-theme';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -27,12 +27,12 @@ export function DevelopmentBuildRequired() {
         <Feather name="package" size={30} color={colors.accentForeground} />
       </View>
       <Text style={[styles.title, { color: colors.foreground }]}>
-        Je potřeba Android build
+        Nainstalujte vlastní aplikaci
       </Text>
       <Text style={[styles.body, { color: colors.mutedForeground }]}>
-        Expo Go na této verzi Androidu nepovoluje přístup ke knihovně médií.
-        Nainstalujte vlastní vývojovou APK Galerie, která obsahuje potřebná
-        oprávnění pro fotografie a videa.
+        Galerie vyžaduje vlastní instalaci s přístupem ke knihovně médií.
+        Pro Android nainstalujte APK Galerie. Vývojový build slouží pro práci
+        s vývojovým serverem, běžná APK funguje samostatně.
       </Text>
     </View>
   );

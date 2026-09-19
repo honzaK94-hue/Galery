@@ -1,7 +1,4 @@
 /* GENERATED FROM tokens.json -- DO NOT EDIT. Run scripts/build-tokens.mjs. */
-// Portable design tokens (colors as hex). Web consumes the theme via
-// src/index.css; mobile (Expo) and any other platform import this object so the
-// whole product shares one source of truth.
 export const tokens = {
   "color": {
     "light": {
@@ -94,6 +91,3 @@ export const tokens = {
   "radius": "0.75rem",
   "spacing": "0.25rem"
 } as const;
-
-export type Tokens = typeof tokens;
-export default tokens;
