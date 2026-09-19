@@ -14,9 +14,11 @@ import {
   useGalleryPreferences,
   sortLabels,
   densityLabels,
+  albumSortLabels,
 } from "./GalleryPreferences";
 
-export type PreferenceKind = "sort" | "density" | "appearance" | "quality";
+export type PreferenceKind =
+  "sort" | "albumSort" | "density" | "appearance" | "quality";
 export function PreferenceSheet({
   kind,
   onClose,
@@ -28,30 +30,35 @@ export function PreferenceSheet({
   const insets = useSafeAreaInsets();
   const prefs = useGalleryPreferences();
   const options =
-    kind === "sort"
-      ? Object.entries(sortLabels)
-      : kind === "density"
-        ? Object.entries(densityLabels)
-        : kind === "quality"
-          ? Object.entries({
-              high: "Vysoká kvalita",
-              balanced: "Úsporné náhledy",
-            })
-          : Object.entries({
-              dark: "Tmavý",
-              light: "Světlý",
-              system: "Podle telefonu",
-            });
+    kind === "albumSort"
+      ? Object.entries(albumSortLabels)
+      : kind === "sort"
+        ? Object.entries(sortLabels)
+        : kind === "density"
+          ? Object.entries(densityLabels)
+          : kind === "quality"
+            ? Object.entries({
+                high: "Vysoká kvalita",
+                balanced: "Úsporné náhledy",
+              })
+            : Object.entries({
+                dark: "Tmavý",
+                light: "Světlý",
+                system: "Podle telefonu",
+              });
   const value =
-    kind === "sort"
-      ? prefs.sort
-      : kind === "density"
-        ? prefs.density
-        : kind === "quality"
-          ? prefs.thumbnailQuality
-          : prefs.appearance;
+    kind === "albumSort"
+      ? prefs.albumSort
+      : kind === "sort"
+        ? prefs.sort
+        : kind === "density"
+          ? prefs.density
+          : kind === "quality"
+            ? prefs.thumbnailQuality
+            : prefs.appearance;
   const titles = {
     sort: "Třídit podle",
+    albumSort: "Řazení alb",
     density: "Zobrazení časové osy",
     appearance: "Vzhled",
     quality: "Kvalita náhledů",
@@ -59,14 +66,22 @@ export function PreferenceSheet({
   const descriptions: Record<string, string> = {
     comfortable: "Větší snímky, přehledné denní oddíly",
     compact: "Více snímků na obrazovce, denní oddíly",
-    overview: "Hustá mřížka seskupená po měsících a letech",
+    overview: "Hustá mřížka se stejnou chronologickou časovou osou",
     newest: "Datum pořízení · od nejnovějších",
     oldest: "Datum pořízení · od nejstarších",
     name: "Abecedně podle názvu souboru",
     high: "Plné barvy fotografií, větší video náhledy, cache 32 MB",
     balanced: "Menší spotřeba paměti a video náhledy, cache 16 MB",
   };
+  const albumDescriptions: Record<string, string> = {
+    name: "Abecedně podle názvu alba",
+    newest: "Od nejnověji vytvořených alb",
+    count: "Od alb s nejvíce dostupnými položkami",
+  };
+  const currentDescriptions =
+    kind === "albumSort" ? albumDescriptions : descriptions;
   const choose = (key: string) => {
+    if (kind === "albumSort") prefs.setAlbumSort(key as typeof prefs.albumSort);
     if (kind === "sort") prefs.setSort(key as typeof prefs.sort);
     if (kind === "density") prefs.setDensity(key as typeof prefs.density);
     if (kind === "appearance")
@@ -165,7 +180,7 @@ export function PreferenceSheet({
                   <Text style={{ color: colors.foreground, fontSize: 16 }}>
                     {label}
                   </Text>
-                  {descriptions[key] ? (
+                  {currentDescriptions[key] ? (
                     <Text
                       style={{
                         color: colors.mutedForeground,
@@ -173,7 +188,7 @@ export function PreferenceSheet({
                         marginTop: 4,
                       }}
                     >
-                      {descriptions[key]}
+                      {currentDescriptions[key]}
                     </Text>
                   ) : null}
                 </View>
@@ -187,7 +202,7 @@ export function PreferenceSheet({
                   marginTop: 12,
                 }}
               >
-                Mění se pouze hustota a nadpisy. Žádné fotografie se podle data
+                Mění se pouze hustota mřížky. Žádné fotografie se podle data
                 neskrývají.
               </Text>
             ) : null}

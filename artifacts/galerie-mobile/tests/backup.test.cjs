@@ -60,17 +60,46 @@ test("backup roundtrip is additive, idempotent, preserves hidden/native trash an
       (2,'101','content://media/101','visible.jpg',0),
       (3,'102','content://media/102','new.jpg',0);
     INSERT INTO media_albums(media_item_id,album_id) VALUES(1,3),(2,1),(3,2);
-    INSERT INTO app_settings(key,value) VALUES('density','compact'),('vault_enabled','true');
+    UPDATE albums SET is_pinned=1,preferred_cover_media_id='101' WHERE id=1;
+    INSERT INTO app_settings(key,value) VALUES('density','compact'),('vault_enabled','true'),
+      ('showSystemAlbums','false'),('albumSort','count');
   `);
   const backup = await exportAlbumBackup(source);
   assert.equal(backup.sourceId, (await exportAlbumBackup(source)).sourceId);
-  assert.deepEqual(backup.settings, { density: "compact" });
+  const expectedSettings = {
+    density: "compact",
+    showSystemAlbums: "false",
+    albumSort: "count",
+  };
+  assert.deepEqual(backup.settings, expectedSettings);
+  assert.equal(backup.albums[0].pinned, true);
+  assert.equal(backup.albums[0].preferredCoverMediaId, "101");
   await source.execAsync("UPDATE albums SET name='Later rename' WHERE id=1");
   await importAlbumBackup(source, backup);
   assert.equal((await source.getAllAsync("SELECT id FROM albums")).length, 3);
   assert.equal(
     (await source.getFirstAsync("SELECT name FROM albums WHERE id=1")).name,
     "Later rename",
+  );
+  const legacyBackup = {
+    ...backup,
+    albums: backup.albums.map(
+      ({ pinned, preferredCoverMediaId, ...album }) => album,
+    ),
+  };
+  await importAlbumBackup(source, legacyBackup);
+  assert.equal(
+    (await source.getFirstAsync("SELECT is_pinned FROM albums WHERE id=1"))
+      .is_pinned,
+    1,
+  );
+  assert.equal(
+    (
+      await source.getFirstAsync(
+        "SELECT preferred_cover_media_id FROM albums WHERE id=1",
+      )
+    ).preferred_cover_media_id,
+    "101",
   );
   await target.execAsync(`
     INSERT INTO albums(id,name) VALUES(1,'Keep');
@@ -83,12 +112,15 @@ test("backup roundtrip is additive, idempotent, preserves hidden/native trash an
   assert.deepEqual(await importAlbumBackup(target, backup), {
     albums: 3,
     media: 3,
-    settings: { density: "compact" },
+    settings: expectedSettings,
   });
   await importAlbumBackup(target, backup);
   const albums = await target.getAllAsync("SELECT * FROM albums");
   assert.equal(albums.length, 4);
   assert.equal(albums.filter((album) => album.name === "Same").length, 2);
+  const pinned = albums.find((album) => album.is_pinned);
+  assert.equal(pinned.name, "Same");
+  assert.equal(pinned.preferred_cover_media_id, "101");
   const rows = await target.getAllAsync(
     "SELECT * FROM media_items ORDER BY id",
   );
@@ -115,6 +147,15 @@ test("backup roundtrip is additive, idempotent, preserves hidden/native trash an
     importAlbumBackup(target, {
       ...backup,
       links: [{ mediaId: "999", albumId: 1 }],
+    }),
+  );
+  await assert.rejects(
+    importAlbumBackup(target, {
+      ...backup,
+      albums: backup.albums.map((album) => ({
+        ...album,
+        preferredCoverMediaId: "100",
+      })),
     }),
   );
   await target.execAsync(`CREATE TRIGGER reject_backup_link BEFORE INSERT ON media_albums

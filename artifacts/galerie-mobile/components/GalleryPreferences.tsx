@@ -16,8 +16,14 @@ import {
 export type GallerySort = "newest" | "oldest" | "name";
 export type GalleryDensity = "comfortable" | "compact" | "overview";
 export type ThumbnailQuality = "balanced" | "high";
+export type AlbumSort = "name" | "newest" | "count";
 type Library = "photos" | "videos";
 type Preferences = {
+  ready: boolean;
+  showSystemAlbums: boolean;
+  albumSort: AlbumSort;
+  setShowSystemAlbums: (value: boolean) => void;
+  setAlbumSort: (value: AlbumSort) => void;
   sort: GallerySort;
   density: GalleryDensity;
   appearance: AppearancePreference;
@@ -44,6 +50,10 @@ export function GalleryPreferences({
 }: {
   children: React.ReactNode;
 }) {
+  const [ready, setReady] = useState(Platform.OS === "web");
+  const [showSystemAlbums, updateShowSystemAlbums] = useState(true);
+  // Preserve the existing explicit newest-created-first custom album order.
+  const [albumSort, updateAlbumSort] = useState<AlbumSort>("newest");
   const [sort, updateSort] = useState<GallerySort>("newest");
   const [density, updateDensity] = useState<GalleryDensity>("comfortable");
   const [appearance, updateAppearance] = useState<AppearancePreference>("dark");
@@ -67,6 +77,8 @@ export function GalleryPreferences({
             swipe,
             doubleTap,
             autoplay,
+            storedShowSystemAlbums,
+            storedAlbumSort,
           ] = await Promise.all([
             settingsStore.getSetting("sort"),
             settingsStore.getSetting("density"),
@@ -75,8 +87,17 @@ export function GalleryPreferences({
             settingsStore.getSetting("swipeEnabled"),
             settingsStore.getSetting("doubleTapEnabled"),
             settingsStore.getSetting("videoAutoplay"),
+            settingsStore.getSetting("showSystemAlbums"),
+            settingsStore.getSetting("albumSort"),
           ]);
           if (cancelled) return;
+          updateShowSystemAlbums(storedShowSystemAlbums !== "false");
+          if (
+            storedAlbumSort === "name" ||
+            storedAlbumSort === "newest" ||
+            storedAlbumSort === "count"
+          )
+            updateAlbumSort(storedAlbumSort);
           if (quality === "balanced" || quality === "high")
             updateQuality(quality);
           updateSwipe(swipe !== "false");
@@ -107,6 +128,8 @@ export function GalleryPreferences({
             "Nastavení",
             "Uložené nastavení se nepodařilo načíst. Používá se výchozí zobrazení.",
           );
+        } finally {
+          if (!cancelled) setReady(true);
         }
       })();
     return () => {
@@ -125,6 +148,20 @@ export function GalleryPreferences({
     (value: GallerySort) => {
       updateSort(value);
       persist("sort", value);
+    },
+    [persist],
+  );
+  const setShowSystemAlbums = useCallback(
+    (value: boolean) => {
+      updateShowSystemAlbums(value);
+      persist("showSystemAlbums", String(value));
+    },
+    [persist],
+  );
+  const setAlbumSort = useCallback(
+    (value: AlbumSort) => {
+      updateAlbumSort(value);
+      persist("albumSort", value);
     },
     [persist],
   );
@@ -177,6 +214,11 @@ export function GalleryPreferences({
   );
   const value = useMemo(
     () => ({
+      ready,
+      showSystemAlbums,
+      albumSort,
+      setShowSystemAlbums,
+      setAlbumSort,
       sort,
       density,
       appearance,
@@ -198,6 +240,11 @@ export function GalleryPreferences({
       requestSelection,
     }),
     [
+      ready,
+      showSystemAlbums,
+      albumSort,
+      setShowSystemAlbums,
+      setAlbumSort,
       sort,
       density,
       appearance,
@@ -234,4 +281,9 @@ export const densityLabels: Record<GalleryDensity, string> = {
   comfortable: "Pohodlné",
   compact: "Kompaktní",
   overview: "Přehled",
+};
+export const albumSortLabels: Record<AlbumSort, string> = {
+  name: "Název",
+  newest: "Nejnovější",
+  count: "Počet položek",
 };

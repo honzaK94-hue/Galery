@@ -1,113 +1,82 @@
-﻿# Galerie 1.1.0 — stav implementace
+﻿# Galerie 1.1.1 — timeline a správa alb
 
-19. 9. 2026. Dokončení biometrie, systémového koše, oblíbených, hromadného sdílení
-             a funkčních položek nastavení nad existující aplikací. Bez změny architektury
-             vlastních SQLite alb, bez nového serveru. Předchozí redesign a čtyři záložky zachovány.
+19. 9. 2026. Rozsah: nové zadání timeline, zobrazování systémových alb, řazení,
+             připínání a titulní fotografie vlastních alb. Zachována také požadovaná stránka
+             O aplikaci. Dřívější požadavek mazání systémových alb byl výslovně zrušen.
 
-## Implementováno v tomto kroku
+## Implementace
 
-- Biometrický zámek skrytých položek/alb s náhradním PINem, gestem nebo heslem telefonu.
-  Výchozí zapnutí, opětovné zamčení v pozadí a po restartu, ověření před vypnutím.
-  Ošetřené zrušení ověření, chybějící zámek telefonu a přechody systémového dialogu.
-- Ochrana skrytých tras, prohlížeče, vytváření a výběru skrytých alb před načtením
-  soukromého obsahu. Blokování snímání obrazovky; bezpečný fullscreen skrytého videa.
-- Nativní modul `galerie-device`: MediaStore koš, obnova, trvalé mazání, oblíbené,
-  skutečná expirace, stránkování a sdílení originálních obsahových URI více souborů.
-  Operace respektují systémový souhlas, zrušení a částečně dokončené dávky.
-- Zachování vztahů a skrytého stavu při přesunu do koše i obnově. Úklid SQLite až
-  po ověřeném odstranění; pozastavení synchronizačního úklidu během systémové operace.
-  Starý místní koš zachován a lze jej převést do systémového koše.
-- Skryté položky jsou filtrované také ze systémových oblíbených a koše, včetně
-  fallback cesty bez nativního modulu. Soukromou část koše lze výslovně odemknout.
-- Oblíbené v prohlížeči, výběru, nabídce Více a na obrazovce alb; vícečetné sdílení.
-- Nastavení vzhledu, hustoty, řazení, kvality náhledů, dvojitého klepnutí, přejetí
-  a automatického přehrávání skutečně mění aplikaci a ukládá se. Při vypnutí přejetí
-  fungují tlačítka Předchozí / Další. Video náhledy mají omezenou paměťovou cache.
-- Funkční nastavení zámku, okamžité zamčení, zabezpečení telefonu, oprávnění,
-  obnova knihovny, koš, vyčištění náhledů a obnovení výchozího zobrazení.
-- Export/import alb, vazeb, skrytého stavu a běžných nastavení do JSON přes systémový
-  výběr souboru/složky. Validace, limit velikosti, transakční import, opakovaný import
-  bez duplikování již importovaných alb, zachování místních dat a zabezpečení.
-- Verze zvýšena na 1.1.0 / Android versionCode 2. Samostatný EAS profil `preview`
-  zachován (`developmentClient: false`, `android.buildType: apk`).
+- Timeline používá Dnes / Včera / posledních 30 kalendářních dnů / starší měsíce
+  aktuálního roku / předchozí roky. Stejné skupiny ve všech hustotách, žádný filtr
+  ani vynechání médií. Nadpisy se obnoví o místní půlnoci a při návratu do aplikace.
+  Zachované stránkování, memoizace, kvalitní náhledy, výběr a výchozí čtyři sloupce
+  na vnitřním displeji. Budoucí a neplatná data zůstávají viditelná.
+- Nastavení → Alba → Zobrazovat systémová alba, výchozí hodnota zapnuto. Vypnutí
+  odstraní celou systémovou sekci pouze z obrazovky Alba, bez změny souborů, Fotek,
+  Videí, MediaStore, vlastních nebo skrytých alb. Při vypnuté volbě se nativní alba
+  nenačítají, ani krátce před načtením uložené preference po restartu.
+- Řazení vlastních alb podle českého názvu, data vytvoření nebo počtu dostupných
+  položek. Dosavadní výchozí pořadí Nejnovější zůstává. Už načtená systémová alba
+  se kvůli změně řazení znovu nenačítají; ruční obnova cache obnoví.
+- Připnutí/odepnutí v nabídce karty vlastního alba i jeho detailu. Připnutá jsou
+  vždy první; uvnitř obou skupin platí zvolené řazení. Odznak na kartě.
+- V otevřeném vlastním albu výběr jedné fotografie → Nastavit jako titulní.
+  Ukládá se stabilní ID média. Nedostupnost, skrytí, koš, odebrání z alba nebo
+  smazání snímku vyvolá bezpečný náhradní obal. Lze obnovit automatickou volbu.
+- Nabídka vlastního alba je posuvná, aby zpřístupnila přejmenování, připnutí,
+  titulní fotografii a smazání. Smazání vlastního alba zachovává média v telefonu.
+- Nastavení → O aplikaci a odkaz z Více: sjednocené karty, ikona, aktuální verze,
+  podíly **5 % puppy Shiny** za obecný nápad a **95 % Mister puppy - Dark** za
+  dopracování, vložené úsilí, výpočetní výkon a profesionální programátorské zkušenosti.
+- Nové preference, připnutí a volba obalu se ukládají a zahrnují do záloh.
 
-## Původní audit a fáze
+Systémová alba nemají tlačítko mazání. Nativní modul, MediaStore operace, Viewer,
+Video Player, zámek a architektura koše nejsou tímto updatem změněné.
 
-Původní opravy oprávnění, návratu z Android Settings, routování ID, návratu z nativního
-alba, duplicit, počtů/obalů, chybějících médií a datové konzistence jsou zachované.
-Fáze 5, 6, 7 a 8 jsou implementované; nově jsou doplněné také biometrie a systémové
-operace výše. Fáze 9: stránkování, virtualizace, omezené náhledy/cache a adaptivní
-rozložení jsou implementované; výkon velké knihovny a oba displeje Foldu potřebují
-fyzické ověření. Tento report neoznačuje všechna zařízení a scénáře za otestované.
+## SQLite a závislosti
 
-## Databáze a závislosti
+Migrace **user_version 3 → 4** přidává do `albums` pouze:
 
-Databáze zůstává `galerie.db`, se stejnými tabulkami `albums`, `media_items`,
-`media_albums`, `app_settings`. Migrace na **user_version 3** přidává `native_trashed`
-k dosavadnímu `trashed_at`, aby rozlišila skutečný a původní místní koš. Migrace
-zachovává existující alba, vztahy, skrytý stav a nastavení. `app_settings` ukládá
-zámek, nové preference, identitu zálohy a mapování importovaných alb. Import nesmí
-zálohou měnit zámek ani nativní stav koše.
+- `is_pinned INTEGER NOT NULL DEFAULT 0`
+- `preferred_cover_media_id TEXT` (nullable)
 
-Přidané přímé závislosti:
+Zachovává existující alba, vztahy, média, skrytý stav, koš a nastavení. Obal smí být
+pouze dostupná fotografie z daného alba; náhradní obal respektuje viditelnost.
+`app_settings` ukládá `showSystemAlbums` a `albumSort`; nepotřebuje novou tabulku.
+Záloha zůstává ve formátu v1 s volitelnými novými poli. Staré zálohy se dál načítají
+bez resetování novějších voleb, které v nich chybí.
 
-- `expo-local-authentication ~57.0.3`
-- `expo-screen-capture ~57.0.3`
-- `expo-document-picker ~57.0.2`
+**Žádné nové ani odstraněné závislosti.** Verze aplikace 1.1.1 / Android versionCode 3.
+EAS profil preview zůstává samostatná APK s `developmentClient: false`.
 
-Přidaný místní nativní modul je v `modules/galerie-device`. Používá API exportované
-balíčkem `expo`; `expo-modules-core` zůstává jen jeho tranzitivní závislostí.
-Žádná původní přímá závislost nebyla odstraněna. Expo SDK 57, React Native 0.86.3
-a React 19.2.3 zůstávají; změněný pnpm lockfile je součástí commitu.
-
-## Provedené kontroly
+## Ověření
 
 - TypeScript mobilní aplikace: **prošel**.
-- Rychlá datová sada: **34/34 prošlo**, pod jednu sekundu. Obsahuje skutečnou SQLite,
-  migrace, restart databáze, skrytá alba, koš, konzistenci vztahů, stránkování,
-  částečné/zrušené nativní operace a bezpečný opakovaný import záloh.
-- Android produkční export: **prošel**, 1 909 modulů, 31 assetů, Hermes přibližně 4,7 MB.
-  Výstup `.expo/validation-export` je ignorovaný a není APK.
-- Nový Android modul: **skutečná Kotlin kompilace prošla**,
-  `:galerie-device:compileReleaseKotlin`, Android SDK 36 / Expo 57 / RN 0.86.3.
-  Autolinking modul rozpoznává. Kontrola proběhla v izolované ignorované kopii,
-  bez přidání vygenerovaného Android projektu nebo SDK do repozitáře.
-- Expo Doctor: **21/21, bez problémů**.
-- `eas whoami`: **Not logged in**. Nová podepsaná APK na EAS zatím nevytvořena;
-  sestavení vyžaduje účet s přístupem k projektu týmu `shiny94s-team`.
+- Rychlé testy: **40/40 prošlo**, přibližně 0,7 s. Skutečná SQLite migrace, zachování
+  dat/vazeb, připnutí a řazení, volba/náhrada obalu, zálohy a restart databáze;
+  timeline ověřena včetně úplnosti datasetu, všech hustot, hranic roku a DST.
+- Kontrola změn: bez chyb whitespace. Zrušené mazání systémových alb ani přesouvání
+  jejich obsahu není součástí výsledných změn.
+- Android produkční export: **prošel**, 1 911 modulů, 32 assetů, Hermes přibližně
+  4,7 MB. Export ověřuje JavaScript a assety, není instalační APK.
 
-## Známé hranice a fyzické ověření
-
-Není připojený Samsung Galaxy Z Fold 8. Implementace, TypeScript, datové testy,
-JavaScript export a kompilace modulu nenahrazují běh výsledné APK na telefonu.
-Zbývá ověřit:
-
-- Start nové APK, povolení/odmítnutí/omezení přístupu a změny v Android Settings.
-- Otisk prstu, PIN, zrušení ověření, opětovné zamčení, ochranu snímků a náhledu
-  v posledních aplikacích, přehrávání skrytého videa přes celou obrazovku.
-- Systémové potvrzení koše, obnovu, expiraci, trvalé mazání, oblíbené a sdílení
-  jedné/více položek do skutečných cílových aplikací.
-- Otevření médií, videa, zoom, swipe/alternativní tlačítka, Android Back, nativní
-  alba, vlastní i skrytá alba a aktualizaci počtů/obalů po operacích.
-- Nastavení po restartu, systémový výběr zálohy, export/import na telefonu,
-  velkou skutečnou knihovnu, cover/inner displej, otočení a otevření/zavření Foldu.
-
-Zámek chrání skrytou část Galerie, **nešifruje originály** před jinými oprávněnými
-aplikacemi. Záloha je nešifrovaná, neobsahuje samotné fotografie/videa a používá
-identifikátory médií stejného telefonu. Samsung může pro oblíbené nebo svou aplikaci
-koše používat i vlastní evidenci; zde se používá Android MediaStore. Uchování
-systémového koše určuje OS, nikoli vlastní časovač Galerie.
-
-Řazení podle názvu prochází metadata zdroje, nikoli plné obrázky. Při omezeném
-přístupu zůstávají metadata nepřístupných médií zachovaná do úplného ověření.
-
-Příkaz pro samostatnou APK z `artifacts/galerie-mobile`:
+Nová APK není v tomto kroku sestavená na EAS. Poslední ověření účtu v této relaci
+vrátilo Not logged in; přístup k projektu `shiny94s-team` potřebuje autor buildu.
+Příkaz z `artifacts/galerie-mobile`:
 
 ```sh
 npx eas-cli@latest build --platform android --profile preview
 ```
 
-## Změněné soubory
+## Co ještě ověřit na telefonu
+
+Fyzický průchod novou APK na Fold 8 v tomto prostředí nebyl proveden. Zbývá ověřit
+vizuální rozložení na obou displejích, přepínač alb po restartu, menu a volbu obalu,
+připínání, návraty Android Back a plynulost skutečné velké knihovny. Krátce projít
+zachované skryté položky, koš, výběr, prohlížeč a přehrávání. Úspěšný export a datové
+testy nejsou označované za fyzické ověření těchto scénářů.
+
+## Změněné soubory tohoto updatu
 
 <!-- changed-files -->
 
@@ -115,41 +84,20 @@ npx eas-cli@latest build --platform android --profile preview
 - `artifacts/galerie-mobile/app/(tabs)/albums.tsx`
 - `artifacts/galerie-mobile/app/(tabs)/more.tsx`
 - `artifacts/galerie-mobile/app/_layout.tsx`
+- `artifacts/galerie-mobile/app/about.tsx`
 - `artifacts/galerie-mobile/app/album/[id].tsx`
-- `artifacts/galerie-mobile/app/favorites.tsx`
-- `artifacts/galerie-mobile/app/help.tsx`
 - `artifacts/galerie-mobile/app/hidden.tsx`
-- `artifacts/galerie-mobile/app/media/[id].tsx`
 - `artifacts/galerie-mobile/app/settings.tsx`
-- `artifacts/galerie-mobile/app/trash.tsx`
-- `artifacts/galerie-mobile/components/AddToAlbumModal.tsx`
-- `artifacts/galerie-mobile/components/CreateAlbumModal.tsx`
+- `artifacts/galerie-mobile/components/AlbumCards.tsx`
 - `artifacts/galerie-mobile/components/GalleryPreferences.tsx`
-- `artifacts/galerie-mobile/components/GalleryProvider.tsx`
 - `artifacts/galerie-mobile/components/MediaGrid.tsx`
-- `artifacts/galerie-mobile/components/MediaThumbnail.tsx`
 - `artifacts/galerie-mobile/components/PreferenceSheet.tsx`
-- `artifacts/galerie-mobile/components/VaultGate.tsx`
-- `artifacts/galerie-mobile/components/VaultProvider.tsx`
-- `artifacts/galerie-mobile/components/VideoPlayer.tsx`
-- `artifacts/galerie-mobile/components/ZoomablePhoto.tsx`
 - `artifacts/galerie-mobile/db/backup.ts`
 - `artifacts/galerie-mobile/db/schema.ts`
-- `artifacts/galerie-mobile/db/stores/media-store.ts`
-- `artifacts/galerie-mobile/lib/media.ts`
-- `artifacts/galerie-mobile/lib/media-actions.ts`
-- `artifacts/galerie-mobile/lib/media-operation.ts`
-- `artifacts/galerie-mobile/lib/viewer-session.ts`
-- `artifacts/galerie-mobile/modules/galerie-device/android/build.gradle`
-- `artifacts/galerie-mobile/modules/galerie-device/android/src/main/AndroidManifest.xml`
-- `artifacts/galerie-mobile/modules/galerie-device/android/src/main/java/expo/modules/galeriedevice/GalerieDeviceModule.kt`
-- `artifacts/galerie-mobile/modules/galerie-device/expo-module.config.json`
-- `artifacts/galerie-mobile/modules/galerie-device/index.ts`
-- `artifacts/galerie-mobile/package.json`
+- `artifacts/galerie-mobile/db/stores/album-store.ts`
+- `artifacts/galerie-mobile/lib/timeline.ts`
 - `artifacts/galerie-mobile/tests/backup.test.cjs`
 - `artifacts/galerie-mobile/tests/library.test.cjs`
-- `artifacts/galerie-mobile/tests/media-actions.test.cjs`
-- `artifacts/galerie-mobile/tests/media-pages.test.cjs`
-- `pnpm-lock.yaml`
+- `artifacts/galerie-mobile/tests/timeline.test.cjs`
 - `README.md`
 - `VERIFICATION.md`

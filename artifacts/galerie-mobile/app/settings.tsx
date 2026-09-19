@@ -21,6 +21,7 @@ import {
   useGalleryPreferences,
   densityLabels,
   sortLabels,
+  albumSortLabels,
 } from "@/components/GalleryPreferences";
 import {
   PreferenceSheet,
@@ -172,6 +173,10 @@ export default function SettingsScreen() {
         if (s.doubleTapEnabled)
           prefs.setDoubleTapEnabled(s.doubleTapEnabled === "true");
         if (s.videoAutoplay) prefs.setVideoAutoplay(s.videoAutoplay === "true");
+        if (s.showSystemAlbums)
+          prefs.setShowSystemAlbums(s.showSystemAlbums === "true");
+        if (s.albumSort)
+          prefs.setAlbumSort(s.albumSort as typeof prefs.albumSort);
         await gallery.refreshPermission();
         Alert.alert(
           "Záloha obnovená",
@@ -228,6 +233,8 @@ export default function SettingsScreen() {
       prefs.setSwipeEnabled(true);
       prefs.setDoubleTapEnabled(true);
       prefs.setVideoAutoplay(false);
+      prefs.setShowSystemAlbums(true);
+      prefs.setAlbumSort("newest");
     });
   const enabled = (value: boolean) => (value ? "Zapnuto" : "Vypnuto");
   const access =
@@ -288,6 +295,26 @@ export default function SettingsScreen() {
               icon: "image",
               value: prefs.thumbnailQuality === "high" ? "Vysoká" : "Úsporná",
               onPress: () => setSheet("quality"),
+            },
+          ]}
+        />
+        <MenuCard
+          title="Alba"
+          items={[
+            {
+              label: "Zobrazovat systémová alba",
+              icon: "folder",
+              value: enabled(prefs.showSystemAlbums),
+              description:
+                "Pouze zobrazení v Albech. Fotografie a videa zůstávají ve Fotkách a Videích.",
+              onPress: () => prefs.setShowSystemAlbums(!prefs.showSystemAlbums),
+            },
+            {
+              label: "Řazení alb",
+              icon: "sliders",
+              value: albumSortLabels[prefs.albumSort],
+              description: "Připnutá vlastní alba se zobrazují vždy první",
+              onPress: () => setSheet("albumSort"),
             },
           ]}
         />
@@ -417,6 +444,17 @@ export default function SettingsScreen() {
             },
           ]}
         />
+        <MenuCard
+          title="Aplikace"
+          items={[
+            {
+              label: "O aplikaci",
+              icon: "info",
+              description: "Galerie, verze a lidé za jejím vznikem",
+              onPress: () => router.push("/about"),
+            },
+          ]}
+        />
         <Text
           style={{
             color: colors.mutedForeground,
@@ -426,7 +464,7 @@ export default function SettingsScreen() {
         >
           Zámek chrání skrytou část této aplikace a blokuje její snímání
           obrazovky. Originály nejsou šifrované. Záloha neobsahuje samotné
-          fotografie ani videa. Galerie 1.1.0.
+          fotografie ani videa.
         </Text>
       </ScrollView>
       <PreferenceSheet kind={sheet} onClose={() => setSheet(null)} />

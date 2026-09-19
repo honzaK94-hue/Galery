@@ -97,7 +97,7 @@ test("migration merges duplicate IDs, preserves all album links and hidden state
       .length,
     2,
   );
-  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 3);
+  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 4);
   assert.deepEqual(await db.getAllAsync("PRAGMA foreign_key_check"), []);
 });
 
@@ -128,8 +128,111 @@ test("v1 migration retains albums and settings, repairs hidden membership, and i
     ).value,
     "comfortable",
   );
-  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 3);
+  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 4);
   assert.deepEqual(await db.getAllAsync("PRAGMA foreign_key_check"), []);
+});
+
+test("v3 migration adds album preferences without changing links, hidden state or native trash", async (t) => {
+  const db = adapter();
+  t.after(() => db.close());
+  await db.execAsync(SCHEMA_SQL);
+  await db.execAsync(`
+    ALTER TABLE media_items ADD COLUMN is_available INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE media_items ADD COLUMN trashed_at INTEGER;
+    ALTER TABLE media_items ADD COLUMN native_trashed INTEGER NOT NULL DEFAULT 0;
+    CREATE UNIQUE INDEX idx_media_identity ON media_items(media_id);
+    INSERT INTO albums(id,name,type) VALUES(1,'Private','hidden');
+    INSERT INTO media_items(id,media_id,uri,is_hidden,trashed_at,native_trashed)
+      VALUES(1,'100','content://media/100',1,1234,1);
+    INSERT INTO media_albums(media_item_id,album_id) VALUES(1,1);
+    INSERT INTO app_settings(key,value) VALUES('density','compact');
+    PRAGMA user_version=3;
+  `);
+  await initDatabase(db);
+  await initDatabase(db);
+  const album = await db.getFirstAsync("SELECT * FROM albums");
+  const media = await db.getFirstAsync("SELECT * FROM media_items");
+  assert.equal(album.is_pinned, 0);
+  assert.equal(album.preferred_cover_media_id, null);
+  assert.equal(media.is_hidden, 1);
+  assert.equal(media.trashed_at, 1234);
+  assert.equal(media.native_trashed, 1);
+  assert.equal((await db.getAllAsync("SELECT * FROM media_albums")).length, 1);
+  assert.equal(
+    (
+      await db.getFirstAsync(
+        "SELECT value FROM app_settings WHERE key='density'",
+      )
+    ).value,
+    "compact",
+  );
+  assert.equal((await db.getFirstAsync("PRAGMA user_version")).user_version, 4);
+  assert.deepEqual(await db.getAllAsync("PRAGMA foreign_key_check"), []);
+});
+
+test("album pinning, Czech sorting and photo covers respect membership, visibility and trash", async (t) => {
+  const { db, media, albums } = await fixture(t);
+  await media.upsertBatch([
+    item("a", 1),
+    item("b", 2),
+    item("v", 3, "video"),
+    item("outside", 4),
+  ]);
+  const alpha = await albums.createAlbum("Álbum");
+  const beta = await albums.createAlbum("Čaj");
+  const last = await albums.createAlbum("Život");
+  assert.equal(alpha.is_pinned, 0);
+  assert.equal(alpha.preferred_cover_media_id, null);
+  await db.execAsync(`UPDATE albums SET created_at=id*100`);
+  const ids = await media.getMediaItemIdsByMediaIds(["a", "b", "v"]);
+  await albums.addMediaBatchToAlbum([...ids.values()], alpha.id);
+  const cover = async () =>
+    (await albums.getAlbums()).find((row) => row.id === alpha.id)
+      .cover_media_id;
+  assert.equal(await cover(), "b");
+  await albums.setCover(alpha.id, "a");
+  assert.equal(await cover(), "a");
+  await assert.rejects(albums.setCover(alpha.id, "v"));
+  await assert.rejects(albums.setCover(alpha.id, "outside"));
+  await media.setHidden("a", true);
+  assert.equal(await cover(), "b");
+  await assert.rejects(albums.setCover(alpha.id, "a"));
+  await media.setHidden("a", false);
+  assert.equal(await cover(), "a");
+  await media.setTrashedBatch(["a"], true);
+  assert.equal(await cover(), "b");
+  await media.setTrashedBatch(["a"], false);
+  await albums.removeMediaFromAlbum(ids.get("a"), alpha.id);
+  assert.equal(await cover(), "b");
+  await albums.setCover(alpha.id, null);
+  const hidden = await albums.createAlbum("Private", "hidden");
+  await albums.addMediaToAlbum(ids.get("b"), hidden.id);
+  await albums.setCover(hidden.id, "b");
+  assert.equal((await albums.getAlbums("hidden"))[0].cover_media_id, "b");
+  assert.equal(await cover(), "v");
+  await media.deleteByMediaIds(["b"]);
+  assert.equal((await albums.getAlbums("hidden"))[0].cover_media_id, null);
+  await albums.setPinned(beta.id, true);
+  assert.deepEqual(
+    (await albums.getAlbums("normal", "newest")).map((row) => row.id),
+    [beta.id, last.id, alpha.id],
+  );
+  assert.deepEqual(
+    (await albums.getAlbums("normal", "name")).map((row) => row.id),
+    [beta.id, alpha.id, last.id],
+  );
+  assert.deepEqual(
+    (await albums.getAlbums("normal", "count")).map((row) => row.id),
+    [beta.id, alpha.id, last.id],
+  );
+  await albums.setPinned(beta.id, false);
+  assert.deepEqual(
+    (await albums.getAlbums("normal", "name")).map((row) => row.id),
+    [alpha.id, beta.id, last.id],
+  );
+  const before = await media.getAllMediaIds();
+  await albums.deleteAlbum(alpha.id);
+  assert.deepEqual(await media.getAllMediaIds(), before);
 });
 
 test("hidden album lifecycle protects phone media and explicit unhide retains only normal memberships", async (t) => {
@@ -397,6 +500,8 @@ test("hidden, trash, settings and membership survive a real database close/reope
     albums.setDatabase(db);
     settings.setDatabase(db);
     const { album } = await seed(media, albums);
+    await albums.setPinned(album.id, true);
+    await albums.setCover(album.id, "a");
     await media.setHidden("a", true);
     await media.setTrashedBatch(["b"], true);
     await settings.setSetting("density", "compact");
@@ -410,6 +515,11 @@ test("hidden, trash, settings and membership survive a real database close/reope
     assert.equal((await media.getTrashedMedia())[0].media_id, "b");
     assert.equal((await media.getMediaItemsByAlbum(album.id)).length, 0);
     assert.equal(await settings.getSetting("density"), "compact");
+    assert.equal((await albums.getAlbumById(album.id)).is_pinned, 1);
+    assert.equal(
+      (await albums.getAlbumById(album.id)).preferred_cover_media_id,
+      "a",
+    );
     await media.setTrashedBatch(["b"], false);
     assert.equal((await media.getMediaItemsByAlbum(album.id)).length, 1);
   } finally {

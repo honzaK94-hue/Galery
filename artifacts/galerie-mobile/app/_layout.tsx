@@ -42,6 +42,7 @@ function RootLayoutNav() {
         <Stack.Screen name="trash" options={{ headerShown: false }} />
         <Stack.Screen name="favorites" options={{ headerShown: false }} />
         <Stack.Screen name="help" options={{ headerShown: false }} />
+        <Stack.Screen name="about" options={{ headerShown: false }} />
       </Stack>
     </>
   );

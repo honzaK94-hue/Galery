@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { BackHandler, StyleSheet, TextInput, View } from "react-native";
+import { Alert, BackHandler, StyleSheet, TextInput, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
 import { albumStore, type AlbumWithCount } from "@/db";
@@ -13,7 +13,7 @@ import {
 import { CreateAlbumModal } from "@/components/CreateAlbumModal";
 import { GalleryHeader } from "@/components/GalleryHeader";
 import { useGalleryPreferences } from "@/components/GalleryPreferences";
-import { useGallery, useLibraryFocus } from "@/components/GalleryProvider";
+import { useGallery } from "@/components/GalleryProvider";
 import { MediaGrid } from "@/components/MediaGrid";
 import { MediaPermissionGate } from "@/components/MediaPermissionGate";
 
@@ -96,6 +96,8 @@ export default function AlbumsScreen() {
 
 function AlbumsContent() {
   const colors = useColors();
+  const prefs = useGalleryPreferences();
+  const { revision, ready: libraryReady } = useGallery();
   const [custom, setCustom] = useState<AlbumWithCount[]>([]);
   const [native, setNative] = useState<NativeAlbumDisplay[]>([]);
   const [favorites, setFavorites] = useState<{
@@ -110,6 +112,11 @@ function AlbumsContent() {
   const [search, setSearch] = useState(false);
   const [query, setQuery] = useState("");
   const generation = useRef(0);
+  const nativeCache = useRef<{
+    revision: number;
+    albums: NativeAlbumDisplay[];
+    favorites: { count: number; cover?: GalleryAsset };
+  } | null>(null);
   useEffect(
     () => () => {
       generation.current++;
@@ -117,20 +124,37 @@ function AlbumsContent() {
     [],
   );
   const load = useCallback(async () => {
+    if (!prefs.ready) return;
     const current = ++generation.current;
+    const loadSystem = async () => {
+      if (!prefs.showSystemAlbums) return null;
+      if (nativeCache.current?.revision === revision)
+        return nativeCache.current;
+      const [albums, page] = await Promise.all([
+        getNativeAlbums(),
+        getMediaPage({ kind: "favorites" }),
+      ]);
+      const result = {
+        revision,
+        albums,
+        favorites: {
+          count: page.totalCount ?? page.items.length,
+          cover: page.items[0],
+        },
+      };
+      if (current === generation.current) nativeCache.current = result;
+      return result;
+    };
     const results = await Promise.allSettled([
-      albumStore.getAlbums("normal"),
-      getNativeAlbums(),
-      getMediaPage({ kind: "favorites" }),
+      albumStore.getAlbums("normal", prefs.albumSort),
+      loadSystem(),
     ]);
     if (current !== generation.current) return;
     if (results[0].status === "fulfilled") setCustom(results[0].value);
-    if (results[1].status === "fulfilled") setNative(results[1].value);
-    if (results[2].status === "fulfilled")
-      setFavorites({
-        count: results[2].value.totalCount ?? results[2].value.items.length,
-        cover: results[2].value.items[0],
-      });
+    if (results[1].status === "fulfilled" && results[1].value) {
+      setNative(results[1].value.albums);
+      setFavorites(results[1].value.favorites);
+    }
     setError(
       results.some((result) => result.status === "rejected")
         ? "Některá alba se nepodařilo načíst."
@@ -138,10 +162,20 @@ function AlbumsContent() {
     );
     setLoading(false);
     setRefreshing(false);
-  }, []);
-  useLibraryFocus(load);
+  }, [prefs.ready, prefs.showSystemAlbums, prefs.albumSort, revision]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+      return () => {
+        generation.current++;
+      };
+    }, [load, libraryReady]),
+  );
+  useEffect(() => {
+    if (!prefs.showSystemAlbums) setSelected(null);
+  }, [prefs.showSystemAlbums]);
   const closeNative = useCallback(() => setSelected(null), []);
-  if (selected)
+  if (selected && prefs.showSystemAlbums)
     return <NativeAlbumDetail album={selected} onBack={closeNative} />;
   const matches = (title: string) =>
     title
@@ -165,11 +199,37 @@ function AlbumsContent() {
       count: album.photo_count,
       uri: album.cover_uri,
       video: album.cover_type === "video",
+      pinned: Boolean(album.is_pinned),
       onPress: () =>
         router.push({
           pathname: "/album/[id]",
           params: { id: String(album.id) },
         }),
+      onMenu: () =>
+        Alert.alert(album.name, "Vlastní album", [
+          {
+            text: album.is_pinned ? "Odepnout album" : "Připnout album",
+            onPress: () => {
+              void albumStore
+                .setPinned(album.id, !album.is_pinned)
+                .catch((e: unknown) =>
+                  Alert.alert(
+                    "Změna se nezdařila",
+                    e instanceof Error ? e.message : "Zkuste to znovu.",
+                  ),
+                );
+            },
+          },
+          {
+            text: "Otevřít album",
+            onPress: () =>
+              router.push({
+                pathname: "/album/[id]",
+                params: { id: String(album.id) },
+              }),
+          },
+          { text: "Zavřít", style: "cancel" },
+        ]),
     }));
   if (matches("Oblíbené"))
     systemCards.unshift({
@@ -216,17 +276,22 @@ function AlbumsContent() {
         error={error}
         onRefresh={() => {
           setRefreshing(true);
+          nativeCache.current = null;
           void load();
         }}
         sections={[
-          {
-            key: "system",
-            title: "Systémová alba",
-            items: systemCards,
-            emptyText: query
-              ? "Žádné systémové album neodpovídá hledání."
-              : "Telefon zatím neobsahuje žádná dostupná alba.",
-          },
+          ...(prefs.ready && prefs.showSystemAlbums
+            ? [
+                {
+                  key: "system",
+                  title: "Systémová alba",
+                  items: systemCards,
+                  emptyText: query
+                    ? "Žádné systémové album neodpovídá hledání."
+                    : "Telefon zatím neobsahuje žádná dostupná alba.",
+                },
+              ]
+            : []),
           {
             key: "custom",
             title: "Moje alba",

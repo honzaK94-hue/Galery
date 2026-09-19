@@ -20,6 +20,8 @@ const settingsSchema = z
     swipeEnabled: z.enum(["true", "false"]).optional(),
     doubleTapEnabled: z.enum(["true", "false"]).optional(),
     videoAutoplay: z.enum(["true", "false"]).optional(),
+    showSystemAlbums: z.enum(["true", "false"]).optional(),
+    albumSort: z.enum(["newest", "name", "count"]).optional(),
   })
   .strict();
 const backupSchema = z
@@ -37,6 +39,8 @@ const backupSchema = z
             type: z.enum(["normal", "hidden"]),
             createdAt: integer,
             updatedAt: integer,
+            pinned: z.boolean().optional(),
+            preferredCoverMediaId: mediaId.nullable().optional(),
           })
           .strict(),
       )
@@ -94,6 +98,21 @@ function validateBackup(input: unknown): AlbumBackup {
       throw new Error("Záloha obsahuje neplatné vazby mezi médii a alby.");
     links.add(key);
   }
+  const photos = new Set(
+    value.media
+      .filter((item) => item.mediaType === "photo")
+      .map((item) => item.mediaId),
+  );
+  for (const album of value.albums) {
+    if (
+      album.preferredCoverMediaId &&
+      (!photos.has(album.preferredCoverMediaId) ||
+        !links.has(`${album.id}:${album.preferredCoverMediaId}`))
+    )
+      throw new Error(
+        "Zvolený obal v záloze není fotografie z příslušného alba.",
+      );
+  }
   return value;
 }
 
@@ -122,7 +141,12 @@ export function exportAlbumBackup(db: SQLiteDatabase): Promise<AlbumBackup> {
         type: "normal" | "hidden";
         created_at: number;
         updated_at: number;
-      }>("SELECT id,name,type,created_at,updated_at FROM albums ORDER BY id");
+        is_pinned: number;
+        preferred_cover_media_id: string | null;
+      }>(`SELECT a.id,a.name,a.type,a.created_at,a.updated_at,a.is_pinned,
+        (SELECT m.media_id FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
+          WHERE ma.album_id=a.id AND m.media_id=a.preferred_cover_media_id AND m.media_type='photo'
+          LIMIT 1) AS preferred_cover_media_id FROM albums a ORDER BY a.id`);
       const media = await connection.getAllAsync<MediaItemRow>(
         "SELECT m.* FROM media_items m WHERE m.is_hidden=1 OR EXISTS(SELECT 1 FROM media_albums ma WHERE ma.media_item_id=m.id) ORDER BY m.id",
       );
@@ -151,6 +175,8 @@ export function exportAlbumBackup(db: SQLiteDatabase): Promise<AlbumBackup> {
           type: album.type,
           createdAt: album.created_at,
           updatedAt: album.updated_at,
+          pinned: !!album.is_pinned,
+          preferredCoverMediaId: album.preferred_cover_media_id,
         })),
         media: media.map((item) => ({
           mediaId: item.media_id,
@@ -216,10 +242,29 @@ export async function importAlbumBackup(
         if (existing && existing.type === album.type) {
           // Reuse by stable origin+ID, never by display name. Keep later renames.
           localId = existing.id;
+          // Legacy v1 backups omit these fields. They must not reset newer
+          // choices on an existing album; current backups restore them exactly.
+          if (album.pinned !== undefined)
+            await connection.runAsync(
+              "UPDATE albums SET is_pinned=? WHERE id=?",
+              [album.pinned ? 1 : 0, localId],
+            );
+          if (album.preferredCoverMediaId !== undefined)
+            await connection.runAsync(
+              "UPDATE albums SET preferred_cover_media_id=? WHERE id=?",
+              [album.preferredCoverMediaId, localId],
+            );
         } else {
           const inserted = await connection.runAsync(
-            "INSERT INTO albums(name,type,created_at,updated_at) VALUES(?,?,?,?)",
-            [album.name, album.type, album.createdAt, album.updatedAt],
+            "INSERT INTO albums(name,type,created_at,updated_at,is_pinned,preferred_cover_media_id) VALUES(?,?,?,?,?,?)",
+            [
+              album.name,
+              album.type,
+              album.createdAt,
+              album.updatedAt,
+              album.pinned ? 1 : 0,
+              album.preferredCoverMediaId ?? null,
+            ],
           );
           localId = inserted.lastInsertRowId;
         }

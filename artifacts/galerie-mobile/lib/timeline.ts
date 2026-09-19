@@ -8,6 +8,10 @@ export type TimelineRow =
 const dayFormatter = new Intl.DateTimeFormat("cs-CZ", {
   day: "numeric",
   month: "long",
+});
+const dayWithYearFormatter = new Intl.DateTimeFormat("cs-CZ", {
+  day: "numeric",
+  month: "long",
   year: "numeric",
 });
 const monthFormatter = new Intl.DateTimeFormat("cs-CZ", {
@@ -23,22 +27,32 @@ function dayNumber(date: Date): number {
 export function timelineGroup(
   timestamp: number,
   now = new Date(),
-  density: GridDensity = "comfortable",
+  _density: GridDensity = "comfortable",
 ) {
   if (!Number.isFinite(timestamp) || timestamp <= 0)
     return { key: "unknown", label: "Bez data" };
   const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime()))
+    return { key: "unknown", label: "Bez data" };
   const age = dayNumber(now) - dayNumber(date);
   const year = date.getFullYear();
   const month = `${year}-${date.getMonth() + 1}`;
-  if (density !== "overview" && age >= 0 && age < 30) {
+  // Density changes the grid, never the meaning of a calendar heading.
+  if (age >= 0 && age < 30) {
     return {
       key: `${month}-${date.getDate()}`,
       label:
-        age === 0 ? "Dnes" : age === 1 ? "Včera" : dayFormatter.format(date),
+        age === 0
+          ? "Dnes"
+          : age === 1
+            ? "Včera"
+            : (year === now.getFullYear()
+                ? dayFormatter
+                : dayWithYearFormatter
+              ).format(date),
     };
   }
-  if (year < now.getFullYear() - 1)
+  if (year < now.getFullYear())
     return { key: String(year), label: String(year) };
   return { key: month, label: monthFormatter.format(date) };
 }

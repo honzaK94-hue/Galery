@@ -109,4 +109,13 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
       `);
     });
   }
+  if ((version?.user_version ?? 0) < 4) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(`
+        ALTER TABLE albums ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE albums ADD COLUMN preferred_cover_media_id TEXT;
+        PRAGMA user_version = 4;
+      `);
+    });
+  }
 }

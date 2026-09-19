@@ -9,6 +9,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   BackHandler,
   FlatList,
   Pressable,
@@ -45,9 +46,17 @@ import {
   setMediaFavorite,
 } from "@/lib/media-actions";
 import { MediaThumbnail } from "./MediaThumbnail";
+import { useVault } from "./VaultProvider";
 
 type GridAction =
-  "hide" | "delete" | "remove" | "share" | "trash" | "restore" | "favorite";
+  | "hide"
+  | "delete"
+  | "remove"
+  | "share"
+  | "trash"
+  | "restore"
+  | "favorite"
+  | "cover";
 const Tile = memo(function Tile({
   asset,
   width,
@@ -159,6 +168,7 @@ export function MediaGrid({
   onCountChange?: (count: number | null) => void;
 }) {
   const colors = useColors();
+  const vault = useVault();
   const { width: windowWidth } = useWindowDimensions();
   const [containerWidth, setContainerWidth] = useState(windowWidth);
   const insets = useSafeAreaInsets();
@@ -184,6 +194,9 @@ export function MediaGrid({
   const [selectionProgress, setSelectionProgress] = useState(0);
   const [picker, setPicker] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [timelineNow, setTimelineNow] = useState(() => new Date());
+  const acting = useRef(false);
   const generation = useRef(0);
   const focused = useRef(false);
   const latestRevision = useRef(revision);
@@ -202,6 +215,63 @@ export function MediaGrid({
   const sourceKey = JSON.stringify(sourceRef.current);
   const hiddenContext =
     source.kind === "hidden" || source.albumType === "hidden";
+  const singleSelectedId = selected.size === 1 ? [...selected][0] : undefined;
+  const singleLoadedType = singleSelectedId
+    ? items.find((item) => item.id === singleSelectedId)?.mediaType
+    : undefined;
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedPhotoId(null);
+    if (source.kind !== "album" || !singleSelectedId) return;
+    if (singleLoadedType) {
+      setSelectedPhotoId(
+        singleLoadedType === "photo" ? singleSelectedId : null,
+      );
+      return;
+    }
+    // Select-all can include a lone photo outside the currently rendered pages.
+    void mediaStore
+      .getMediaItemByMediaId(singleSelectedId)
+      .then((row) => {
+        if (
+          !cancelled &&
+          row?.media_type === "photo" &&
+          row.is_available &&
+          !row.trashed_at
+        )
+          setSelectedPhotoId(singleSelectedId);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [source.kind, source.id, singleSelectedId, singleLoadedType]);
+  useEffect(() => {
+    if (source.kind !== "photos") return;
+    let timer: ReturnType<typeof setTimeout>;
+    const update = () => {
+      const now = new Date();
+      setTimelineNow(now);
+      clearTimeout(timer);
+      const midnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+      );
+      timer = setTimeout(
+        update,
+        Math.max(1, midnight.getTime() - now.getTime() + 100),
+      );
+    };
+    update();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") update();
+    });
+    return () => {
+      clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [source.kind]);
   const rows = useMemo(
     () =>
       createTimelineRows(
@@ -209,8 +279,9 @@ export function MediaGrid({
         columns,
         source.kind === "photos" && (sort ?? source.sort) !== "name",
         density,
+        timelineNow,
       ),
-    [items, columns, source.kind, source.sort, sort, density],
+    [items, columns, source.kind, source.sort, sort, density, timelineNow],
   );
   const clear = useCallback(() => {
     setSelected(new Set());
@@ -370,10 +441,23 @@ export function MediaGrid({
     }
   }, []);
   const action = async (kind: GridAction) => {
-    if (busy || !selected.size) return;
+    if (busy || acting.current || !selected.size) return;
+    if (
+      kind === "cover" &&
+      (source.kind !== "album" ||
+        selected.size !== 1 ||
+        selectedPhotoId !== singleSelectedId)
+    )
+      return;
+    if (hiddenContext && !vault.canAccess()) return;
+    acting.current = true;
     setBusy(true);
     const ids = [...selected];
     try {
+      if (kind === "cover") {
+        await albumStore.setCover(Number(source.id), ids[0]);
+        setMessage("Titulní fotografie nastavena.");
+      }
       if (kind === "hide") await mediaStore.setHiddenBatch(ids, !hiddenContext);
       if (kind === "trash" || kind === "restore") {
         const result = await setMediaTrashed(ids, kind === "trash");
@@ -411,6 +495,7 @@ export function MediaGrid({
       );
       if (kind === "delete") refreshLibrary();
     } finally {
+      acting.current = false;
       setBusy(false);
     }
   };
@@ -421,6 +506,11 @@ export function MediaGrid({
           "hide",
           "favorite",
           ...(source.kind === "album" ? ["remove" as const] : []),
+          ...(source.kind === "album" &&
+          singleSelectedId &&
+          selectedPhotoId === singleSelectedId
+            ? ["cover" as const]
+            : []),
           "share",
           "trash",
           "delete",
@@ -433,6 +523,7 @@ export function MediaGrid({
     restore: "Obnovit",
     delete: "Smazat z telefonu",
     favorite: source.kind === "favorites" ? "Z oblíbených" : "Oblíbené",
+    cover: "Nastavit jako titulní",
   };
   const icons: Record<
     GridAction,
@@ -445,6 +536,7 @@ export function MediaGrid({
     restore: "rotate-ccw",
     delete: "trash-2",
     favorite: "heart",
+    cover: "image",
   };
   return (
     <View
@@ -659,6 +751,7 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 9,
     letterSpacing: 0.1,
+    textTransform: "uppercase",
   },
   empty: {
     flex: 1,

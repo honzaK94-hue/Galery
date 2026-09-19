@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@workspace/galerie-design-system/hooks/use-colors";
@@ -20,11 +20,7 @@ export default function MoreScreen() {
   const insets = useSafeAreaInsets();
   const prefs = useGalleryPreferences();
   const [sheet, setSheet] = useState<PreferenceKind | null>(null);
-  const about = () =>
-    Alert.alert(
-      "Galerie",
-      "Galerie 1.1.0\n\nMístní fotografie, videa, alba, oblíbené a systémový koš. Skrytou část chrání zámek telefonu. Vaše média se nikam automaticky nenahrávají.",
-    );
+  const about = () => router.push("/about");
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <GalleryHeader

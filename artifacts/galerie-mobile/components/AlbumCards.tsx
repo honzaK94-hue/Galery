@@ -22,7 +22,9 @@ export type AlbumCardItem = {
   uri?: string | null;
   video?: boolean;
   hidden?: boolean;
+  pinned?: boolean;
   onPress: () => void;
+  onMenu?: () => void;
 };
 export type AlbumCardSection = {
   key: string;
@@ -51,9 +53,10 @@ const AlbumCard = memo(function AlbumCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${item.title}, ${albumCountLabel(item.count)}${item.hidden ? ", skryté album" : ""}`}
+      accessibilityLabel={`${item.title}, ${albumCountLabel(item.count)}${item.hidden ? ", skryté album" : ""}${item.pinned ? ", připnuté" : ""}`}
       testID={`album-card-${item.key}`}
       onPress={item.onPress}
+      onLongPress={item.onMenu}
       style={({ pressed }) => [
         styles.card,
         {
@@ -90,6 +93,24 @@ const AlbumCard = memo(function AlbumCard({
           <View style={styles.hiddenBadge}>
             <Feather name="eye-off" size={14} color="#FFFFFF" />
           </View>
+        ) : null}
+        {item.pinned ? (
+          <View style={styles.pinnedBadge}>
+            <Feather name="bookmark" size={14} color="#FFFFFF" />
+          </View>
+        ) : null}
+        {item.onMenu ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Možnosti alba ${item.title}`}
+            onPress={(event) => {
+              event.stopPropagation();
+              item.onMenu?.();
+            }}
+            style={styles.menuButton}
+          >
+            <Feather name="more-vertical" size={20} color="#FFFFFF" />
+          </Pressable>
         ) : null}
       </View>
       <View style={styles.caption}>
@@ -265,6 +286,25 @@ const styles = StyleSheet.create({
     right: 10,
     top: 10,
     backgroundColor: "#07101DCC",
+    borderRadius: 16,
+    padding: 7,
+  },
+  menuButton: {
+    position: "absolute",
+    right: 8,
+    top: 8,
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#07101DCC",
+    borderRadius: 22,
+  },
+  pinnedBadge: {
+    position: "absolute",
+    left: 10,
+    top: 10,
+    backgroundColor: "#168BEE",
     borderRadius: 16,
     padding: 7,
   },

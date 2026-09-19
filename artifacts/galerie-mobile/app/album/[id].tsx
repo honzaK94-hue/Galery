@@ -45,6 +45,7 @@ function AlbumContent() {
   const [rename, setRename] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [search, setSearch] = useState(false);
   const [query, setQuery] = useState("");
@@ -142,24 +143,30 @@ function AlbumContent() {
       ],
     );
   };
+  const changeAlbum = async (kind: "pin" | "automaticCover") => {
+    if (!album || mutating.current) return;
+    if (album.type === "hidden" && !vault.canAccess()) return;
+    mutating.current = true;
+    setBusy(true);
+    setMenuVisible(false);
+    try {
+      if (kind === "pin") await albumStore.setPinned(albumId, !album.is_pinned);
+      else await albumStore.setCover(albumId, null);
+      await load();
+    } catch (e) {
+      Alert.alert(
+        "Album se nepodařilo upravit",
+        e instanceof Error ? e.message : "Zkuste to znovu.",
+      );
+    } finally {
+      mutating.current = false;
+      setBusy(false);
+    }
+  };
   const menu = () => {
-    if (!album || busy) return;
-    Alert.alert(
-      album.type === "hidden" ? "Skryté album" : album.name,
-      album.type === "hidden" ? "Skryté album" : "Vlastní album",
-      [
-        {
-          text: "Přejmenovat",
-          onPress: () => {
-            setName(album.name);
-            setRenameError(null);
-            setRename(true);
-          },
-        },
-        { text: "Smazat album", style: "destructive", onPress: remove },
-        { text: "Zrušit", style: "cancel" },
-      ],
-    );
+    if (!album || busy || mutating.current) return;
+    if (album.type === "hidden" && !vault.canAccess()) return;
+    setMenuVisible(true);
   };
   const header = (
     <GalleryHeader
@@ -261,6 +268,86 @@ function AlbumContent() {
           </View>
         </>
       )}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
+            <View
+              style={[
+                styles.modal,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              <Text style={[styles.modalTitle, { color: colors.foreground }]}>
+                {album?.name}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => {
+                  if (!album || (album.type === "hidden" && !vault.canAccess()))
+                    return;
+                  setMenuVisible(false);
+                  setName(album.name);
+                  setRenameError(null);
+                  setRename(true);
+                }}
+                style={styles.menuButton}
+              >
+                <Text style={{ color: colors.foreground }}>Přejmenovat</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => void changeAlbum("pin")}
+                style={styles.menuButton}
+              >
+                <Text style={{ color: colors.foreground }}>
+                  {album?.is_pinned ? "Odepnout album" : "Připnout album"}
+                </Text>
+              </Pressable>
+              {album?.preferred_cover_media_id ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => void changeAlbum("automaticCover")}
+                  style={styles.menuButton}
+                >
+                  <Text style={{ color: colors.foreground }}>
+                    Automatická titulní fotografie
+                  </Text>
+                </Pressable>
+              ) : null}
+              <Text style={{ color: colors.mutedForeground, lineHeight: 20 }}>
+                Vlastní titulní fotografii nastavíte výběrem jedné fotografie v
+                albu.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => {
+                  setMenuVisible(false);
+                  remove();
+                }}
+                style={styles.menuButton}
+              >
+                <Text style={{ color: colors.destructive }}>Smazat album</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setMenuVisible(false)}
+                style={styles.button}
+              >
+                <Text style={{ color: colors.primary }}>Zavřít</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
       <Modal
         visible={rename}
         transparent
@@ -399,6 +486,7 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   modalTitle: { fontSize: 20, fontFamily: nativeTheme.fonts.bold },
+  menuButton: { minHeight: 44, justifyContent: "center", paddingVertical: 10 },
   input: {
     minHeight: 48,
     paddingHorizontal: 14,

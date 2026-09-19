@@ -3,12 +3,15 @@ import { databaseTask } from "../queue";
 import { notifyLibraryChanged } from "../changes";
 
 export type AlbumType = "normal" | "hidden";
+export type AlbumSort = "newest" | "name" | "count";
 export type AlbumRow = {
   id: number;
   name: string;
   type: AlbumType;
   created_at: number;
   updated_at: number;
+  is_pinned: 0 | 1;
+  preferred_cover_media_id: string | null;
 };
 export type AlbumWithCount = AlbumRow & {
   photo_count: number;
@@ -46,6 +49,8 @@ export class AlbumStore {
         type,
         created_at: now,
         updated_at: now,
+        is_pinned: 0 as const,
+        preferred_cover_media_id: null,
       };
     });
     notifyLibraryChanged();
@@ -70,23 +75,71 @@ export class AlbumStore {
     );
     notifyLibraryChanged();
   }
-  getAlbums(type: AlbumType = "normal"): Promise<AlbumWithCount[]> {
-    return databaseTask(this.db, (db) =>
-      db.getAllAsync<AlbumWithCount>(
+  async setPinned(id: number, pinned: boolean): Promise<void> {
+    await databaseTask(this.db, async (db) => {
+      const result = await db.runAsync(
+        "UPDATE albums SET is_pinned=?,updated_at=? WHERE id=?",
+        [pinned ? 1 : 0, Date.now(), id],
+      );
+      if (!result.changes) throw new Error("Album už neexistuje.");
+    });
+    notifyLibraryChanged();
+  }
+  async setCover(id: number, mediaId: string | null): Promise<void> {
+    await databaseTask(this.db, async (db) => {
+      const result = await db.runAsync(
+        `UPDATE albums SET preferred_cover_media_id=?,updated_at=? WHERE id=?
+          AND (? IS NULL OR EXISTS(
+            SELECT 1 FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
+            WHERE ma.album_id=albums.id AND m.media_id=? AND m.media_type='photo'
+              AND m.is_hidden=(albums.type='hidden') AND m.is_available=1 AND m.trashed_at IS NULL
+          ))`,
+        [mediaId, Date.now(), id, mediaId, mediaId],
+      );
+      if (!result.changes)
+        throw new Error("Obal musí být dostupná fotografie z tohoto alba.");
+    });
+    notifyLibraryChanged();
+  }
+  getAlbums(
+    type: AlbumType = "normal",
+    sort: AlbumSort = "newest",
+  ): Promise<AlbumWithCount[]> {
+    return databaseTask(this.db, async (db) => {
+      const albums = await db.getAllAsync<AlbumWithCount>(
         `SELECT a.*,
       (SELECT COUNT(*) FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
         WHERE ma.album_id=a.id AND m.is_hidden=(a.type='hidden')
           AND m.is_available=1 AND m.trashed_at IS NULL) AS photo_count,
       cover.media_id AS cover_media_id, cover.uri AS cover_uri, cover.media_type AS cover_type
-      FROM albums a LEFT JOIN media_items cover ON cover.id=(
+      FROM albums a LEFT JOIN media_items cover ON cover.id=COALESCE((
+        SELECT m.id FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
+        WHERE ma.album_id=a.id AND m.media_id=a.preferred_cover_media_id AND m.media_type='photo'
+          AND m.is_hidden=(a.type='hidden') AND m.is_available=1 AND m.trashed_at IS NULL
+        LIMIT 1),(
         SELECT m.id FROM media_albums ma JOIN media_items m ON m.id=ma.media_item_id
         WHERE ma.album_id=a.id AND m.is_hidden=(a.type='hidden')
           AND m.is_available=1 AND m.trashed_at IS NULL
-        ORDER BY m.creation_time DESC,m.id DESC LIMIT 1)
+        ORDER BY (m.media_type='photo') DESC,m.creation_time DESC,m.id DESC LIMIT 1))
       WHERE a.type=? ORDER BY a.created_at DESC,a.id DESC`,
         [type],
-      ),
-    );
+      );
+      const collator =
+        sort === "name"
+          ? new Intl.Collator("cs-CZ", { numeric: true, sensitivity: "base" })
+          : null;
+      return albums.sort(
+        (a, b) =>
+          b.is_pinned - a.is_pinned ||
+          (collator
+            ? collator.compare(a.name, b.name)
+            : sort === "count"
+              ? b.photo_count - a.photo_count
+              : 0) ||
+          b.created_at - a.created_at ||
+          b.id - a.id,
+      );
+    });
   }
   getAlbumById(id: number): Promise<AlbumRow | null> {
     return databaseTask(this.db, (db) =>

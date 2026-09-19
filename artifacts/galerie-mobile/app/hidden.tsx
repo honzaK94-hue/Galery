@@ -25,7 +25,7 @@ export default function HiddenScreen() {
 function HiddenContent() {
   const colors = useColors();
   const { selectionActive } = useGallery();
-  const { sort, density } = useGalleryPreferences();
+  const { sort, density, albumSort } = useGalleryPreferences();
   const [mode, setMode] = useState<"items" | "albums">("items");
   const [albums, setAlbums] = useState<AlbumWithCount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,7 +44,7 @@ function HiddenContent() {
   const load = async () => {
     const current = ++generation.current;
     try {
-      const result = await albumStore.getAlbums("hidden");
+      const result = await albumStore.getAlbums("hidden", albumSort);
       if (current !== generation.current) return;
       setAlbums(result);
       setError(null);
@@ -183,6 +183,7 @@ function HiddenContent() {
                     uri: album.cover_uri,
                     video: album.cover_type === "video",
                     hidden: true,
+                    pinned: album.is_pinned === 1,
                     onPress: () =>
                       router.push({
                         pathname: "/album/[id]",
