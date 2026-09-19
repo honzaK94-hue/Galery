@@ -4,18 +4,17 @@
     "appVersionSource": "local"
   },
   "build": {
-    "development": {
+    "preview": {
       "distribution": "internal",
+      "developmentClient": false,
       "pnpm": "10.26.1",
       "android": {
         "image": "latest",
         "buildType": "apk"
-      },
-      "developmentClient": true
+      }
     },
-    "preview": {
-      "extends": "development",
-      "developmentClient": false
+    "development": {
+      "extends": "preview"
     }
   }
 }
